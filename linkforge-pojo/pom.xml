@@ -25,6 +25,12 @@
             <version>${project.version}</version>
         </dependency>
 
+        <!-- 实体上要打 @TableName / @TableId，所以需要 MP 的注解包 -->
+        <dependency>
+            <groupId>com.baomidou</groupId>
+            <artifactId>mybatis-plus-annotation</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

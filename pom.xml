@@ -54,6 +54,16 @@
                 <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
                 <version>${mybatis-plus.version}</version>
             </dependency>
+            <!--
+              只有注解（@TableName / @TableId 等）的那半边。
+              pojo 模块存实体只需要它，引整个 starter 会把 spring-boot、jdbc 一起带进
+              依赖链最底层，任何一个依赖 pojo 的模块都得跟着吃这些包。
+            -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-annotation</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
 
             <!-- JJWT 三件套：api 编译期用、impl 运行期用、jackson 负责 JSON 序列化 -->
             <dependency>
