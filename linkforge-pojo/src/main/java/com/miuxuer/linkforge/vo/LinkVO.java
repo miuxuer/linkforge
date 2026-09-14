@@ -42,6 +42,16 @@ public class LinkVO {
     /** 为 null 表示永不过期。 */
     private LocalDateTime expireTime;
 
+    /**
+     * 二维码中间的 logo 地址，为 null 表示用不带 logo 的纯二维码。
+     *
+     * <p>前端需要它，是因为 {@code PUT /api/link/{id}} 是整条覆盖语义：
+     * 列表页上点"停用"时，得把这一条记录的所有字段原样传回去，
+     * 少传一个就会被置空。VO 里没有这个字段的话，用户会发现
+     * "改了个状态，二维码上的 logo 没了"。
+     */
+    private String qrLogo;
+
     private LocalDateTime createTime;
 
     /**
@@ -61,6 +71,7 @@ public class LinkVO {
                 .status(link.getStatus())
                 .visitCount(link.getVisitCount())
                 .expireTime(link.getExpireTime())
+                .qrLogo(link.getQrLogo())
                 .createTime(link.getCreateTime())
                 .build();
     }
