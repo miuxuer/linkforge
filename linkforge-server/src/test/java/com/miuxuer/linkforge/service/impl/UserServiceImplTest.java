@@ -3,6 +3,7 @@ package com.miuxuer.linkforge.service.impl;
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.UserConstant;
+import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
 import com.miuxuer.linkforge.entity.User;
@@ -13,7 +14,9 @@ import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.utils.JwtUtils;
 import com.miuxuer.linkforge.vo.UserLoginVO;
+import com.miuxuer.linkforge.vo.UserProfileVO;
 import io.jsonwebtoken.Claims;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -73,6 +76,12 @@ class UserServiceImplTest {
         jwtProperties.setTokenName("token");
 
         userService = new UserServiceImpl(userMapper, idSegmentManager, passwordEncoder, jwtProperties);
+    }
+
+    @AfterEach
+    void tearDown() {
+        // getProfile 用到 ThreadLocal，不清会串到下一个用例
+        CurrentHolder.remove();
     }
 
     /** 造一个"库里已经存在"的用户，密码是 {@link #RAW_PASSWORD} 的 BCrypt 密文。 */
@@ -277,5 +286,43 @@ class UserServiceImplTest {
                 () -> userService.login(loginDto("miuxuer", "wrong-password")));
 
         assertEquals(MessageConstant.LOGIN_FAILED, e.getMessage());
+    }
+
+    // ==================== 当前用户资料 ====================
+
+    @Test
+    @DisplayName("查资料 → 按 ThreadLocal 里的用户 id 查，返回 VO")
+    void getProfile_shouldUseCurrentHolderId() {
+        CurrentHolder.setCurrentId(1001L);
+        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+
+        UserProfileVO vo = userService.getProfile();
+
+        assertEquals(1001L, vo.getId());
+        assertEquals("miuxuer", vo.getUsername());
+        assertEquals("苗雪儿", vo.getNickname());
+        // 接口签名里根本没有 userId 参数，想查别人的都没有入口
+        verify(userMapper).selectById(1001L);
+    }
+
+    @Test
+    @DisplayName("ThreadLocal 里没有身份 → 401，而不是查出一个 null 用户")
+    void getProfile_withoutCurrentUser_shouldThrowUnauthorized() {
+        // 模拟拦截器没生效的情况
+        BusinessException e = assertThrows(BusinessException.class, () -> userService.getProfile());
+
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+        verify(userMapper, never()).selectById(any());
+    }
+
+    @Test
+    @DisplayName("token 有效但账号已被删 → 401，而不是一路 NPE 变成 500")
+    void getProfile_userDeleted_shouldThrowUnauthorized() {
+        CurrentHolder.setCurrentId(1001L);
+        when(userMapper.selectById(1001L)).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class, () -> userService.getProfile());
+
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
     }
 }

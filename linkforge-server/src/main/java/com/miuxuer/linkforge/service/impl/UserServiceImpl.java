@@ -4,6 +4,7 @@ import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.UserConstant;
+import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
 import com.miuxuer.linkforge.entity.User;
@@ -15,6 +16,7 @@ import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.service.UserService;
 import com.miuxuer.linkforge.utils.JwtUtils;
 import com.miuxuer.linkforge.vo.UserLoginVO;
+import com.miuxuer.linkforge.vo.UserProfileVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -136,6 +138,31 @@ public class UserServiceImpl implements UserService {
         claims.put(JwtClaimsConstant.ROLE, user.getRole());
 
         return JwtUtils.createJwt(jwtProperties.getSecretKey(), jwtProperties.getTtl(), claims);
+    }
+
+    @Override
+    public UserProfileVO getProfile() {
+        Long userId = CurrentHolder.getCurrentId();
+        if (userId == null) {
+            // 能走到这里说明拦截器没生效（路径没注册、白名单配错）——
+            // 属于配置问题而不是用户操作问题，但对用户来说结果一样，按未登录处理
+            throw new BusinessException(ResultCode.UNAUTHORIZED, MessageConstant.NOT_LOGGED_IN);
+        }
+
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            // token 还在有效期内，但账号已经被删（本人注销或管理员清理）。
+            // 不挡住的话，后面用 user.getXxx() 会一路 NPE，最后变成一个莫名其妙的 500
+            throw new BusinessException(ResultCode.UNAUTHORIZED, MessageConstant.NOT_LOGGED_IN);
+        }
+
+        return UserProfileVO.builder()
+                .id(user.getId())
+                .username(user.getUsername())
+                .nickname(user.getNickname())
+                .avatar(user.getAvatar())
+                .role(user.getRole())
+                .build();
     }
 
     private boolean existsByUsername(String username) {
