@@ -51,7 +51,18 @@ onMounted(loadDetail)
 
 // ==================== 二维码 ====================
 
-const qrSize = ref(300)
+/**
+ * 生成二维码时的像素尺寸。
+ *
+ * <p>固定值，不再让用户选。原来的小/中/大三个档位是坏的 ——
+ * 图片的 CSS 把显示宽度锁死在 260px，所以切换档位只改变了
+ * 下载文件的分辨率，屏幕上完全看不出区别，用户以为功能没用。
+ *
+ * <p>这里取 400 是因为它只影响**下载下来的文件**：屏幕上反正会被 CSS 缩到 260px 显示，
+ * 而下载的图有可能被拿去打印，分辨率高一点更稳妥。
+ */
+const QR_IMAGE_SIZE = 400
+
 const qrImageUrl = ref('')
 const qrLoading = ref(false)
 
@@ -69,7 +80,7 @@ async function loadQrCode() {
   qrLoading.value = true
   try {
     const blob = await request.get(`/link/${linkId}/qrcode`, {
-      params: { size: qrSize.value },
+      params: { size: QR_IMAGE_SIZE },
       responseType: 'blob'
     })
     // 换尺寸时会生成新的 object URL，旧的必须手动释放 ——
@@ -272,19 +283,12 @@ function onRemoveLogo() {
           </div>
 
           <div class="qr-actions">
-            <el-radio-group v-model="qrSize" size="small" @change="loadQrCode">
-              <el-radio-button :value="200">小</el-radio-button>
-              <el-radio-button :value="300">中</el-radio-button>
-              <el-radio-button :value="500">大</el-radio-button>
-            </el-radio-group>
-
             <el-button
               type="primary"
-              size="small"
               :disabled="!qrImageUrl"
               @click="onDownload"
             >
-              下载
+              下载二维码
             </el-button>
           </div>
 
@@ -343,6 +347,11 @@ function onRemoveLogo() {
   min-height: 240px;
 }
 
+/**
+ * 注意这里是"显示尺寸"，和接口生成的图片像素尺寸是两回事。
+ * 图片会被缩放到这个宽度铺在卡片里 —— 所以调大接口的 size 参数
+ * 不会让预览变大，只会让下载下来的文件更清晰。
+ */
 .qr-image {
   width: 100%;
   max-width: 260px;
@@ -351,7 +360,7 @@ function onRemoveLogo() {
 .qr-actions {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
   margin-top: 16px;
 }
 

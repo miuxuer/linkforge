@@ -205,8 +205,17 @@ onBeforeUnmount(() => {
     <el-card class="chart-card">
       <template #header>访问量 Top 10</template>
 
-      <div v-show="topLinks.length" ref="topChartRef" class="chart"></div>
-      <el-empty v-if="!topLinks.length" description="还没有访问数据" :image-size="80" />
+      <!--
+        用 v-if 而不是 v-show。v-show 只是 display:none，元素还在 DOM 里、
+        宽高是 0；而 echarts.init 在一个 0x0 的容器上初始化会直接失败
+        （控制台会看到 "Can't get DOM width or height"），
+        之后就算有数据了也画不出来 —— 因为图表实例已经建坏了。
+
+        v-if 是"没有数据就不渲染这个 div"，等数据来了才创建元素，
+        这时候它有实际宽高，init 才是有效的
+      -->
+      <div v-if="topLinks.length" ref="topChartRef" class="chart"></div>
+      <el-empty v-else description="还没有访问数据" :image-size="80" />
     </el-card>
   </div>
 </template>
