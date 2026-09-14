@@ -251,11 +251,32 @@ UPDATE t_user SET role = 1 WHERE username = '你的用户名';
 ## 测试
 
 ```bash
-mvn test          # 后端 231 个单元测试，约 17 秒
+mvn test                  # 后端 252 个测试，约 20 秒
 cd web && npm run build   # 前端构建
 ```
 
-单元测试不依赖 MySQL / Redis，随时可跑。
+后端测试分两类：
+
+- **单元测试**（236 个）：用手写的 mock 验证各段逻辑，不依赖 MySQL / Redis，
+  随时可跑
+- **集成测试**（16 个）：用 H2 内存库 + MockMvc 把整个 Spring 上下文跑起来，
+  走完整 HTTP 链路（拦截器、参数校验、Service、Mapper、异常处理），
+  覆盖注册登录、认证鉴权、短链 CRUD、租户隔离、二维码、看板
+
+集成测试不依赖 Redis（用 mock 顶掉），也不需要本机装 MySQL。
+
+## 性能
+
+跳转接口的压测数据（本机、服务与压测工具同机）：
+
+| 场景 | QPS | P99 |
+|---|---|---|
+| 有缓存 | 6464 | 35 ms |
+| Redis 不可用（降级直查库） | 738 | ~300 ms |
+
+**Redis 挂掉时失败数是 0** —— 跳转功能完全正常，只是变慢。
+详细的压测方法、限流验证，以及压测抓出来的三个 bug 记录在
+[docs/performance.md](docs/performance.md)。
 
 ---
 

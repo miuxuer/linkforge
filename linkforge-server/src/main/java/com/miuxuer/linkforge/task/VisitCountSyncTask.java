@@ -59,7 +59,15 @@ public class VisitCountSyncTask {
             return;
         }
 
-        Set<String> keys = scanVisitKeys();
+        Set<String> keys;
+        try {
+            keys = scanVisitKeys();
+        } catch (Exception e) {
+            // Redis 连不上时跳过这一轮。定时任务每 5 分钟跑一次，
+            // 不接住的话每次都会打一整条异常堆栈，把日志刷得没法看
+            log.warn("扫描访问计数失败，跳过本轮同步: {}", e.getMessage());
+            return;
+        }
         if (keys.isEmpty()) {
             return;
         }

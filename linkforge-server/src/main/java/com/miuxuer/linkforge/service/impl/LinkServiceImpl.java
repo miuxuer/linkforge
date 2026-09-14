@@ -393,9 +393,31 @@ public class LinkServiceImpl implements LinkService {
         if (!isAvailable(link)) {
             return null;
         }
-        stringRedisTemplate.opsForValue().set(
-                cacheKey, link.getOriginalUrl(), cacheTtlFor(link));
+        writeCacheQuietly(cacheKey, link);
         return link.getOriginalUrl();
+    }
+
+    /**
+     * 回填缓存，失败就跳过。
+     *
+     * <p><b>这一步必须容错，否则整个降级是假的。</b> 被压测抓到过一次：
+     * 把 Redis 指向一个不存在的端口，跳转接口返回的是 500 而不是降级成功 ——
+     * 因为我只给"读缓存"那段包了 try-catch，忘了"写缓存"同样要走 Redis。
+     * 数据已经从数据库查出来了，却因为回填缓存失败而整个请求失败，
+     * 完全违背了"缓存是性能优化、不该成为可用性单点"的初衷。
+     *
+     * <p>写不进去的后果只是"下次还得查库"，比把请求打回去轻得多。
+     */
+    private void writeCacheQuietly(String cacheKey, Link link) {
+        if (stringRedisTemplate == null) {
+            return;
+        }
+        try {
+            stringRedisTemplate.opsForValue().set(
+                    cacheKey, link.getOriginalUrl(), cacheTtlFor(link));
+        } catch (Exception e) {
+            log.warn("回填短链缓存失败（本次跳转不受影响）: shortCode={}", link.getShortCode(), e);
+        }
     }
 
     /**
@@ -409,12 +431,7 @@ public class LinkServiceImpl implements LinkService {
         if (!isAvailable(link)) {
             return null;
         }
-        if (stringRedisTemplate != null) {
-            stringRedisTemplate.opsForValue().set(
-                    RedisKeyConstant.LINK_CACHE + shortCode,
-                    link.getOriginalUrl(),
-                    cacheTtlFor(link));
-        }
+        writeCacheQuietly(RedisKeyConstant.LINK_CACHE + shortCode, link);
         return link.getOriginalUrl();
     }
 

@@ -65,6 +65,7 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -326,6 +327,38 @@ class LinkServiceImplTest {
         when(linkMapper.selectOne(any())).thenReturn(dirty);
 
         assertNull(linkService.getOriginalUrl(shortCode));
+    }
+
+    // ==================== Redis 故障时的降级 ====================
+
+    @Test
+    @DisplayName("★ Redis 抛异常 → 降级直查库，而不是让跳转 500")
+    void redisReadFailure_shouldDegradeToDatabase() {
+        String shortCode = "degrade1";
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        // 模拟"配了 Redis 但连不上"：进程挂了、网络断了、连接池耗尽
+        when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Connection refused"));
+        when(linkMapper.selectOne(any())).thenReturn(link(shortCode, "https://www.example.com"));
+
+        // 注意不是 `stringRedisTemplate != null` 那一条 —— 那只覆盖了"没配 Redis"，
+        // 覆盖不了"配了但连不上"，而后者才是真正会发生的情况
+        assertEquals("https://www.example.com", linkService.getOriginalUrl(shortCode));
+    }
+
+    @Test
+    @DisplayName("★ 回填缓存失败也不能影响跳转 —— 这一步漏了的话整个降级是假的")
+    void redisWriteFailure_shouldNotBreakRedirect() {
+        String shortCode = "degrade2";
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        when(valueOperations.get(anyString())).thenThrow(new RuntimeException("Connection refused"));
+        // 数据已经从库里查出来了，只是回填缓存失败
+        doThrow(new RuntimeException("Connection refused"))
+                .when(valueOperations).set(anyString(), anyString(), any(Duration.class));
+        when(linkMapper.selectOne(any())).thenReturn(link(shortCode, "https://www.example.com"));
+
+        // 这一条是压测逼出来的：我一开始只给"读缓存"包了 try-catch，
+        // 结果 Redis 挂掉时跳转返回 500 —— 数据都查出来了，却因为写缓存失败而整个失败
+        assertEquals("https://www.example.com", linkService.getOriginalUrl(shortCode));
     }
 
     // ==================== 降级可用性 ====================

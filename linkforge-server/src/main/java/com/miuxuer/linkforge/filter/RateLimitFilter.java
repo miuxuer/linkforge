@@ -106,11 +106,26 @@ public class RateLimitFilter extends OncePerRequestFilter {
         String clientIp = WebUtils.getClientIp(request);
         String key = RedisKeyConstant.RATE_LIMIT + clientIp;
 
-        Long allowed = stringRedisTemplate.execute(
-                redisScript,
-                List.of(key),
-                String.valueOf(windowSeconds),
-                String.valueOf(maxRequests));
+        Long allowed;
+        try {
+            allowed = stringRedisTemplate.execute(
+                    redisScript,
+                    List.of(key),
+                    String.valueOf(windowSeconds),
+                    String.valueOf(maxRequests));
+        } catch (Exception e) {
+            // ★ Redis 连不上时放行，而不是把请求打成 500。
+            //
+            // 这个过滤器跑在 DispatcherServlet 之前，异常没人接得住 ——
+            // 一旦漏出去，Redis 挂掉的结果就是"整站跳转全部 500"，
+            // 而限流本来只是个防刷的附加功能。
+            //
+            // 这里的取舍是"可用性优先于防护"：Redis 挂掉期间没有限流保护，
+            // 但服务能用。反过来（拒绝所有请求）等于因为限流组件挂了而让整个服务停摆。
+            log.warn("限流检查失败，本次放行: {}", e.getMessage());
+            filterChain.doFilter(request, response);
+            return;
+        }
 
         if (allowed != null && allowed == 0L) {
             log.warn("限流触发: IP={}, 窗口={}s, 阈值={}", clientIp, windowSeconds, maxRequests);
