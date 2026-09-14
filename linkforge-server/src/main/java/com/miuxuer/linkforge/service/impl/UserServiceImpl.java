@@ -1,6 +1,7 @@
 package com.miuxuer.linkforge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.StatusConstant;
@@ -8,6 +9,7 @@ import com.miuxuer.linkforge.constant.UserConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
+import com.miuxuer.linkforge.dto.UserUpdateDTO;
 import com.miuxuer.linkforge.entity.User;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.mapper.UserMapper;
@@ -166,6 +168,25 @@ public class UserServiceImpl implements UserService {
                 .avatar(user.getAvatar())
                 .role(user.getRole())
                 .build();
+    }
+
+    @Override
+    public UserProfileVO updateProfile(UserUpdateDTO dto) {
+        Long userId = CurrentHolder.requireCurrentId();
+
+        // 用 wrapper 显式 set 而不是 updateById：updateById 会把实体里为 null 的字段
+        // 当成"不修改"，于是"删掉头像"这个操作就表达不出来了（传给 null 等于没传）。
+        // 这里每个字段都显式 set，null 就是"设成 null"。
+        userMapper.updateWithFill(new User(), new LambdaUpdateWrapper<User>()
+                .eq(User::getId, userId)
+                .set(User::getNickname, dto.getNickname())
+                .set(User::getAvatar, dto.getAvatar()));
+
+        log.info("用户资料已更新: id={}", userId);
+
+        // 回查一次而不是拿 dto 拼返回值：改完之后数据库里到底是什么样，
+        // 只有查一遍才知道（比如字段被截断、或者将来加了别的填充逻辑）
+        return getProfile();
     }
 
     private boolean existsByUsername(String username) {

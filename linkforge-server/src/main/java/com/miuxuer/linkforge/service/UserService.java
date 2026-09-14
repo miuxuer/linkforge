@@ -2,6 +2,7 @@ package com.miuxuer.linkforge.service;
 
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
+import com.miuxuer.linkforge.dto.UserUpdateDTO;
 import com.miuxuer.linkforge.vo.UserLoginVO;
 import com.miuxuer.linkforge.vo.UserProfileVO;
 
@@ -40,4 +41,15 @@ public interface UserService {
      * @throws com.miuxuer.linkforge.exception.BusinessException 未登录、或 token 有效但账号已不存在
      */
     UserProfileVO getProfile();
+
+    /**
+     * 修改当前登录用户的资料（昵称、头像）。
+     *
+     * <p>和 {@link #getProfile()} 一样，签名里没有 userId —— 只能改自己的。
+     *
+     * @param dto 新资料，整条覆盖语义
+     * @return 修改后的资料
+     * @throws com.miuxuer.linkforge.exception.BusinessException 未登录
+     */
+    UserProfileVO updateProfile(UserUpdateDTO dto);
 }

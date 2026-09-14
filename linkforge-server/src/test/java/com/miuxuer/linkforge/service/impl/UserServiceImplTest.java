@@ -1,5 +1,7 @@
 package com.miuxuer.linkforge.service.impl;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.StatusConstant;
@@ -7,8 +9,11 @@ import com.miuxuer.linkforge.constant.UserConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
+import com.miuxuer.linkforge.dto.UserUpdateDTO;
 import com.miuxuer.linkforge.entity.User;
 import com.miuxuer.linkforge.exception.BusinessException;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.miuxuer.linkforge.mapper.UserMapper;
 import com.miuxuer.linkforge.properties.JwtProperties;
 import com.miuxuer.linkforge.result.ResultCode;
@@ -17,7 +22,9 @@ import com.miuxuer.linkforge.utils.JwtUtils;
 import com.miuxuer.linkforge.vo.UserLoginVO;
 import com.miuxuer.linkforge.vo.UserProfileVO;
 import io.jsonwebtoken.Claims;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,6 +75,20 @@ class UserServiceImplTest {
     private JwtProperties jwtProperties;
 
     private UserServiceImpl userService;
+
+    /**
+     * 给 MyBatis-Plus 喂一份 User 的表结构元数据。
+     *
+     * <p>改资料那几个用例要检查 {@code LambdaUpdateWrapper.getSqlSet()} ——
+     * 把 {@code User::getNickname} 解析成列名 {@code nickname} 需要一份
+     * "实体 → TableInfo" 的缓存，而这份缓存平时由 MyBatis 启动时填充，
+     * 纯单元测试里是空的，会报 {@code can not find lambda cache for this entity}。
+     */
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), User.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -325,5 +346,75 @@ class UserServiceImplTest {
         BusinessException e = assertThrows(BusinessException.class, () -> userService.getProfile());
 
         assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+    }
+
+    // ==================== 修改资料 ====================
+
+    @SuppressWarnings("unchecked")
+    private LambdaUpdateWrapper<User> captureUpdateWrapper() {
+        ArgumentCaptor<Wrapper<User>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(userMapper).updateWithFill(any(User.class), captor.capture());
+        return (LambdaUpdateWrapper<User>) captor.getValue();
+    }
+
+    private static UserUpdateDTO profileDto(String nickname, String avatar) {
+        UserUpdateDTO dto = new UserUpdateDTO();
+        dto.setNickname(nickname);
+        dto.setAvatar(avatar);
+        return dto;
+    }
+
+    @Test
+    @DisplayName("改资料 → UPDATE 的 WHERE 是当前用户，SET 里有昵称和头像")
+    void updateProfile_shouldUpdateOwnRow() {
+        CurrentHolder.setCurrentId(1001L);
+        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
+
+        userService.updateProfile(profileDto("新昵称", "https://oss.example.com/a.png"));
+
+        LambdaUpdateWrapper<User> wrapper = captureUpdateWrapper();
+        // WHERE 里是当前登录用户的 id —— 接口签名没有 userId，
+        // 想改别人的连入口都没有
+        assertTrue(wrapper.getSqlSegment().contains("id"), wrapper.getSqlSegment());
+        assertTrue(wrapper.getSqlSet().contains("nickname"), wrapper.getSqlSet());
+        assertTrue(wrapper.getSqlSet().contains("avatar"), wrapper.getSqlSet());
+    }
+
+    @Test
+    @DisplayName("★ 头像传 null → 也要出现在 SET 里，否则清不掉头像")
+    void updateProfile_nullAvatar_shouldStillBeSet() {
+        CurrentHolder.setCurrentId(1001L);
+        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
+
+        userService.updateProfile(profileDto("新昵称", null));
+
+        // 用 updateById 的话，null 会被当成"不修改"，用户就永远删不掉自己的头像。
+        // 这里用 wrapper 显式 set，null 就是"设成 null"
+        assertTrue(captureUpdateWrapper().getSqlSet().contains("avatar"),
+                "头像是 null 时也必须出现在 SET 子句里");
+    }
+
+    @Test
+    @DisplayName("改完返回数据库里的最新状态，不是拿请求参数拼出来的")
+    void updateProfile_shouldReturnReloadedProfile() {
+        CurrentHolder.setCurrentId(1001L);
+        // 回查时返回的是"库里的"值
+        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
+
+        UserProfileVO profile = userService.updateProfile(profileDto("新昵称", null));
+
+        // existingUser 造的昵称是"苗雪儿"，而不是我们提交的"新昵称" ——
+        // 说明返回值确实来自回查，不是拿 dto 拼的
+        assertEquals("苗雪儿", profile.getNickname());
+    }
+
+    @Test
+    @DisplayName("未登录 → 401，且不写库")
+    void updateProfile_withoutLogin_shouldThrowUnauthorized() {
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> userService.updateProfile(profileDto("新昵称", null)));
+
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+        verify(userMapper, never()).updateWithFill(any(User.class), any());
     }
 }

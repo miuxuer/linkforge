@@ -3,6 +3,7 @@ package com.miuxuer.linkforge.controller.user;
 import com.miuxuer.linkforge.annotation.OperateLog;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
+import com.miuxuer.linkforge.dto.UserUpdateDTO;
 import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.service.UserService;
 import com.miuxuer.linkforge.vo.UserLoginVO;
@@ -11,6 +12,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -69,5 +71,17 @@ public class UserController {
     @GetMapping("/profile")
     public Result<UserProfileVO> profile() {
         return Result.success(userService.getProfile());
+    }
+
+    /**
+     * 修改当前登录用户的资料（昵称、头像）。
+     *
+     * <p>只能改自己的 —— Service 的签名里就没有 userId，
+     * 想改别人的连入口都没有。
+     */
+    @PutMapping("/profile")
+    @OperateLog
+    public Result<UserProfileVO> updateProfile(@RequestBody @Valid UserUpdateDTO dto) {
+        return Result.success(userService.updateProfile(dto));
     }
 }
