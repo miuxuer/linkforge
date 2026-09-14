@@ -1,7 +1,9 @@
 package com.miuxuer.linkforge.service;
 
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
+import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
 import com.miuxuer.linkforge.vo.LinkVO;
+import com.miuxuer.linkforge.vo.PageResult;
 
 /**
  * 短链服务接口。实现见 {@code impl/LinkServiceImpl}。
@@ -21,6 +23,19 @@ public interface LinkService {
      * @throws com.miuxuer.linkforge.exception.BusinessException 未登录
      */
     LinkVO createLink(LinkCreateDTO dto);
+
+    /**
+     * 分页查询当前登录用户的短链。
+     *
+     * <p><b>查询范围由登录态决定，不由请求决定。</b> SQL 里永远带着
+     * {@code user_id = 当前登录用户}，所以不存在"查到别人短链"这条路径 ——
+     * 这是多租户隔离的实现方式：不去检查"你有没有权限看这条"，
+     * 而是让你根本查不到它。
+     *
+     * @param dto 分页与筛选条件
+     * @return 当前页的短链
+     */
+    PageResult<LinkVO> pageMyLinks(LinkPageQueryDTO dto);
 
     /**
      * 按短码取原始长链接，供 302 跳转用。

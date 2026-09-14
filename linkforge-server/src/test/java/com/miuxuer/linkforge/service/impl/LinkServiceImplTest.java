@@ -1,9 +1,15 @@
 package com.miuxuer.linkforge.service.impl;
 
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.common.hash.BloomFilter;
 import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
+import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.entity.Link;
 import com.miuxuer.linkforge.mapper.LinkMapper;
@@ -11,7 +17,10 @@ import com.miuxuer.linkforge.properties.LinkProperties;
 import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.vo.LinkVO;
+import com.miuxuer.linkforge.vo.PageResult;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,10 +37,13 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -74,6 +86,25 @@ class LinkServiceImplTest {
     private LinkProperties linkProperties;
 
     private LinkServiceImpl linkService;
+
+    /**
+     * 给 MyBatis-Plus 喂一份 Link 的表结构元数据。
+     *
+     * <p>分页查询那几个用例要检查 {@code LambdaQueryWrapper.getSqlSegment()} ——
+     * 把 {@code Link::getUserId} 解析成列名 {@code user_id} 需要一份
+     * "实体 → TableInfo" 的缓存。这份缓存平时由 MyBatis 启动时扫描实体填充，
+     * 而这里是没有 Spring 上下文的纯单元测试，缓存是空的，直接报
+     * {@code can not find lambda cache for this entity}。
+     *
+     * <p>注意：包装器的构建本身不报错，报错的是"生成 SQL 片段"这一步 ——
+     * 也就是说，单元测试里不初始化这份缓存的话，你根本验证不到生成的 SQL 长什么样，
+     * 而多租户隔离恰恰只能从 SQL 上验证。
+     */
+    @BeforeAll
+    static void initMybatisPlusTableInfo() {
+        TableInfoHelper.initTableInfo(
+                new MapperBuilderAssistant(new MybatisConfiguration(), ""), Link.class);
+    }
 
     @BeforeEach
     void setUp() {
@@ -302,5 +333,119 @@ class LinkServiceImplTest {
         verify(linkMapper, never()).insertWithFill(any(Link.class));
         // 也不能白白浪费一个号段里的 id
         verify(idSegmentManager, never()).getNextId(any());
+    }
+
+    // ==================== 分页查询与多租户隔离 ====================
+
+    /** 捕获 selectPage 收到的那条 wrapper，用来检查它生成的 SQL 片段。 */
+    @SuppressWarnings("unchecked")
+    private LambdaQueryWrapper<Link> capturePageWrapper() {
+        ArgumentCaptor<Wrapper<Link>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(linkMapper).selectPage(any(), captor.capture());
+        return (LambdaQueryWrapper<Link>) captor.getValue();
+    }
+
+    private static LinkPageQueryDTO pageDto(String keyword) {
+        LinkPageQueryDTO dto = new LinkPageQueryDTO();
+        dto.setKeyword(keyword);
+        return dto;
+    }
+
+    @Test
+    @DisplayName("分页查询 → SQL 永远带 user_id 条件")
+    void pageMyLinks_shouldAlwaysFilterByCurrentUser() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectPage(any(), any())).thenReturn(new Page<>());
+
+        linkService.pageMyLinks(new LinkPageQueryDTO());
+
+        // 哪怕没有任何筛选条件，user_id 也必须在
+        assertTrue(capturePageWrapper().getSqlSegment().contains("user_id"),
+                "分页查询漏了 user_id 条件，等于把全站短链都查出来了");
+    }
+
+    @Test
+    @DisplayName("带关键词搜索 → OR 分组必须被括号包住，且 user_id 在分组之外")
+    void pageMyLinks_keywordOrMustBeNested() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectPage(any(), any())).thenReturn(new Page<>());
+
+        linkService.pageMyLinks(pageDto("abc"));
+
+        String sql = capturePageWrapper().getSqlSegment();
+
+        // 期望的结构：user_id = ? AND (title LIKE ? OR short_code LIKE ?)
+        // 少写那对括号会变成：
+        //   (user_id = ? AND title LIKE ?) OR short_code LIKE ?
+        // 于是"短码匹配上的记录"绕过了用户隔离 —— 别人搜一串短码前缀
+        // 就能翻出全站短链。AND 优先级高于 OR，这个坑不报错、只越权。
+        int orIndex = sql.indexOf(" OR ");
+        assertTrue(orIndex > 0, "关键词搜索应该生成 OR 条件: " + sql);
+
+        int groupOpen = sql.lastIndexOf('(', orIndex);
+        int groupClose = sql.indexOf(')', orIndex);
+        assertTrue(groupOpen >= 0 && groupClose > orIndex, "OR 没有被括号包住: " + sql);
+
+        // OR 所在的那个括号组里应该只有两个 LIKE 条件
+        assertTrue(sql.substring(groupOpen, groupClose).contains("LIKE"),
+                "括号里应该是两个 LIKE: " + sql);
+        // 而 user_id 必须在括号组之外，否则就失去隔离作用了
+        assertTrue(sql.substring(0, groupOpen).contains("user_id"),
+                "user_id 条件被卷进了 OR 分组，隔离失效: " + sql);
+    }
+
+    @Test
+    @DisplayName("分页查询 → 实体转成 VO，total/page/pageSize 透传")
+    void pageMyLinks_shouldMapToVo() {
+        CurrentHolder.setCurrentId(1001L);
+        Page<Link> dbPage = new Page<>(2, 10);
+        dbPage.setTotal(35);
+        Link entity = link("abc123", "https://www.baidu.com");
+        entity.setId(9L);
+        entity.setTitle("百度");
+        dbPage.setRecords(List.of(entity));
+        when(linkMapper.selectPage(any(), any())).thenReturn(dbPage);
+
+        PageResult<LinkVO> result = linkService.pageMyLinks(new LinkPageQueryDTO());
+
+        assertEquals(35, result.getTotal());
+        assertEquals(2, result.getPage());
+        assertEquals(10, result.getPageSize());
+        assertEquals(1, result.getRecords().size());
+        assertEquals("abc123", result.getRecords().get(0).getShortCode());
+        assertEquals("http://localhost:8080/abc123", result.getRecords().get(0).getShortUrl());
+    }
+
+    @Test
+    @DisplayName("分页查询 → 状态筛选条件按需拼接")
+    void pageMyLinks_statusFilterShouldBeOptional() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectPage(any(), any())).thenReturn(new Page<>());
+
+        LinkPageQueryDTO withStatus = new LinkPageQueryDTO();
+        withStatus.setStatus(StatusConstant.DISABLED);
+        linkService.pageMyLinks(withStatus);
+        linkService.pageMyLinks(new LinkPageQueryDTO());
+
+        // 两次调用，一次带 status 一次不带，一次把两条 wrapper 都抓出来
+        ArgumentCaptor<Wrapper<Link>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(linkMapper, times(2)).selectPage(any(), captor.capture());
+        String withStatusSql = ((LambdaQueryWrapper<Link>) captor.getAllValues().get(0)).getSqlSegment();
+        String withoutStatusSql = ((LambdaQueryWrapper<Link>) captor.getAllValues().get(1)).getSqlSegment();
+
+        assertTrue(withStatusSql.contains("status"), "传了 status 就应该带上筛选条件: " + withStatusSql);
+        // 注意别拼成恒真/恒假的表达式：没传筛选条件时条件就不该出现
+        assertFalse(withoutStatusSql.contains("status"),
+                "没传 status 却拼了筛选条件，会莫名其妙查不到数据: " + withoutStatusSql);
+    }
+
+    @Test
+    @DisplayName("分页查询 → 未登录直接 401，不查库")
+    void pageMyLinks_withoutLogin_shouldThrowUnauthorized() {
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> linkService.pageMyLinks(new LinkPageQueryDTO()));
+
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+        verify(linkMapper, never()).selectPage(any(), any());
     }
 }

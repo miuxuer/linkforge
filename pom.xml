@@ -70,6 +70,17 @@
                 <artifactId>mybatis-plus-annotation</artifactId>
                 <version>${mybatis-plus.version}</version>
             </dependency>
+            <!--
+              分页插件用的 SQL 解析器。MyBatis-Plus 从 3.5.9 起把它从主包里拆了出来 ——
+              只引 starter 的话，分页拦截器类根本不存在，写 PaginationInnerInterceptor
+              会直接编译不过。升级 MyBatis-Plus 时如果忘了同步升这个包，
+              运行期会报 NoClassDefFoundError。
+            -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-jsqlparser</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
 
             <!-- JJWT 三件套：api 编译期用、impl 运行期用、jackson 负责 JSON 序列化 -->
             <dependency>

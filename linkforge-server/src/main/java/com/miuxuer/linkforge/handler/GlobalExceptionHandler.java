@@ -5,6 +5,7 @@ import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.result.ResultCode;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.tomcat.util.http.InvalidParameterException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.FieldError;
@@ -80,6 +81,28 @@ public class GlobalExceptionHandler {
         log.warn("参数校验失败: {}", message);
         return ResponseEntity.status(ResultCode.PARAM_ERROR.getHttpStatus())
                 .body(Result.error(ResultCode.PARAM_ERROR, message));
+    }
+
+    /**
+     * 查询参数解码失败。
+     *
+     * <p>客户端把非 UTF-8 编码的中文（比如用 GBK 编码后塞进 URL）当查询参数发过来时，
+     * Tomcat 解码会抛这个异常。它是<b>客户端的问题</b>，必须返回 400 ——
+     * 落进兜底分支变成 500 的话，监控会把它统计成"服务端故障"，
+     * 排查方向也被带偏（明明是对方编码不对，却去查服务端代码）。
+     *
+     * <p>直接 import Tomcat 的类确实有点脏，换 Jetty / Undertow 就编译不过。
+     * 但换来的是类型安全、编译期就能发现 —— 真换了容器，这行编译失败正好提醒你
+     * "这里的异常类型要跟着换"，比运行期静默失效要好。
+     *
+     * <p>不能图省事接父类 {@code IllegalStateException}：那会把大量真正的程序错误
+     * （比如状态机用错、容器初始化失败）也误报成 400，反而掩盖 bug。
+     */
+    @ExceptionHandler(InvalidParameterException.class)
+    public ResponseEntity<Result<Void>> handleInvalidParameter(InvalidParameterException e) {
+        log.warn("请求参数解码失败（客户端编码可能不是 UTF-8）: {}", e.getMessage());
+        return ResponseEntity.status(ResultCode.PARAM_ERROR.getHttpStatus())
+                .body(Result.error(ResultCode.PARAM_ERROR, "请求参数编码不正确，请使用 UTF-8 编码"));
     }
 
     /**

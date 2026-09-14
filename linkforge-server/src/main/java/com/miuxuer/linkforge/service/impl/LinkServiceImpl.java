@@ -1,12 +1,14 @@
 package com.miuxuer.linkforge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.common.hash.BloomFilter;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.RedisKeyConstant;
 import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
+import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
 import com.miuxuer.linkforge.entity.Link;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.mapper.LinkMapper;
@@ -16,12 +18,15 @@ import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.service.LinkService;
 import com.miuxuer.linkforge.utils.Base62;
 import com.miuxuer.linkforge.vo.LinkVO;
+import com.miuxuer.linkforge.vo.PageResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -119,6 +124,43 @@ public class LinkServiceImpl implements LinkService {
 
         log.info("短链创建成功: id={}, shortCode={}, userId={}", id, shortCode, userId);
         return LinkVO.from(link, linkProperties.getDomain());
+    }
+
+    @Override
+    public PageResult<LinkVO> pageMyLinks(LinkPageQueryDTO dto) {
+        Long userId = requireCurrentUserId();
+
+        Page<Link> pageParam = new Page<>(dto.getPage(), dto.getPageSize());
+
+        LambdaQueryWrapper<Link> wrapper = new LambdaQueryWrapper<Link>()
+                // ★ 多租户隔离的那一行。它在最外层，且不带任何条件判断 ——
+                // 永远存在，不可能被某个分支绕过。
+                .eq(Link::getUserId, userId)
+                .eq(dto.getStatus() != null, Link::getStatus, dto.getStatus())
+                // ★ 关键词的 OR 必须包在 and(...) 里，不能平铺。
+                // 平铺的话生成的 SQL 是：
+                //   WHERE user_id = ? AND title LIKE ? OR short_code LIKE ?
+                // 而 AND 的优先级高于 OR，实际等价于：
+                //   WHERE (user_id = ? AND title LIKE ?) OR short_code LIKE ?
+                // 于是"短码匹配上的记录"会绕过 user_id 限制 ——
+                // 别人拿一串短码前缀搜索，就能翻出全站的短链。
+                // 这类越权不需要任何攻击技巧，纯粹是括号少写了一个。
+                .and(StringUtils.hasText(dto.getKeyword()), w -> w
+                        .like(Link::getTitle, dto.getKeyword())
+                        .or()
+                        .like(Link::getShortCode, dto.getKeyword()))
+                .orderByDesc(Link::getCreateTime);
+
+        // 注意 keyword 里的 % 和 _ 会被当成 LIKE 的通配符（比如搜 "50%" 会匹配到所有记录）。
+        // 影响只限于"搜出来的结果比预期多"，不涉及越权，暂时不做转义处理。
+
+        Page<Link> result = linkMapper.selectPage(pageParam, wrapper);
+
+        List<LinkVO> records = result.getRecords().stream()
+                .map(link -> LinkVO.from(link, linkProperties.getDomain()))
+                .toList();
+
+        return PageResult.of(result.getTotal(), result.getCurrent(), result.getSize(), records);
     }
 
     /**

@@ -4,6 +4,7 @@ import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.exception.LinkNotFoundException;
 import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.result.ResultCode;
+import org.apache.tomcat.util.http.InvalidParameterException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.MethodParameter;
@@ -89,6 +90,21 @@ class GlobalExceptionHandlerTest {
         assertFalse(message.contains("SELECT"), "响应体泄露了 SQL");
         assertFalse(message.contains("SQLSyntaxErrorException"), "响应体泄露了内部异常类名");
         assertEquals(ResultCode.SYSTEM_ERROR.getMessage(), message);
+    }
+
+    @Test
+    @DisplayName("查询参数编码错（非 UTF-8）→ 400 而不是 500")
+    void invalidParameterEncoding_shouldReturn400() {
+        // Tomcat 解码失败时抛的异常。不单独接住的话会掉进兜底分支变成 500，
+        // 监控就把它统计成"服务端故障"了 —— 实际上是客户端编码不对
+        InvalidParameterException e = new InvalidParameterException(
+                "Character decoding failed. Parameter [keyword] has been ignored.");
+
+        ResponseEntity<Result<Void>> response = handler.handleInvalidParameter(e);
+
+        assertEquals(400, response.getStatusCode().value());
+        assertTrue(response.getStatusCode().is4xxClientError());
+        assertEquals(ResultCode.PARAM_ERROR.getCode(), response.getBody().getCode());
     }
 
     @Test
