@@ -1,12 +1,19 @@
 package com.miuxuer.linkforge.service.impl;
 
+import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.UserConstant;
+import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
 import com.miuxuer.linkforge.entity.User;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.mapper.UserMapper;
+import com.miuxuer.linkforge.properties.JwtProperties;
+import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
+import com.miuxuer.linkforge.utils.JwtUtils;
+import com.miuxuer.linkforge.vo.UserLoginVO;
+import io.jsonwebtoken.Claims;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -19,7 +26,10 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -47,13 +57,41 @@ class UserServiceImplTest {
     @Mock
     private IdSegmentManager idSegmentManager;
 
+    private static final String JWT_SECRET = "linkforge-unit-test-secret-key-0123456789";
+
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
+
+    private JwtProperties jwtProperties;
 
     private UserServiceImpl userService;
 
     @BeforeEach
     void setUp() {
-        userService = new UserServiceImpl(userMapper, idSegmentManager, passwordEncoder);
+        jwtProperties = new JwtProperties();
+        jwtProperties.setSecretKey(JWT_SECRET);
+        jwtProperties.setTtl(3600_000L);
+        jwtProperties.setTokenName("token");
+
+        userService = new UserServiceImpl(userMapper, idSegmentManager, passwordEncoder, jwtProperties);
+    }
+
+    /** 造一个"库里已经存在"的用户，密码是 {@link #RAW_PASSWORD} 的 BCrypt 密文。 */
+    private User existingUser(String username, int status) {
+        User user = new User();
+        user.setId(1001L);
+        user.setUsername(username);
+        user.setPassword(passwordEncoder.encode(RAW_PASSWORD));
+        user.setNickname("苗雪儿");
+        user.setRole(UserConstant.ROLE_USER);
+        user.setStatus(status);
+        return user;
+    }
+
+    private static UserLoginDTO loginDto(String username, String password) {
+        UserLoginDTO dto = new UserLoginDTO();
+        dto.setUsername(username);
+        dto.setPassword(password);
+        return dto;
     }
 
     private static UserRegisterDTO dto(String username, String nickname) {
@@ -157,5 +195,87 @@ class UserServiceImplTest {
         userService.register(dto("miuxuer", "苗雪儿"));
 
         assertEquals("苗雪儿", captureInserted().getNickname());
+    }
+
+    // ==================== 登录 ====================
+
+    @Test
+    @DisplayName("登录成功 → 返回用户信息和可验签的 token")
+    void login_success_shouldReturnToken() {
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+
+        UserLoginVO vo = userService.login(loginDto("miuxuer", RAW_PASSWORD));
+
+        assertEquals(1001L, vo.getId());
+        assertEquals("miuxuer", vo.getUsername());
+        assertEquals("苗雪儿", vo.getNickname());
+        assertEquals(UserConstant.ROLE_USER, vo.getRole());
+        assertNotNull(vo.getToken());
+    }
+
+    @Test
+    @DisplayName("签发的 token 能验签，claims 里的 userId 和角色都对")
+    void login_tokenShouldCarryIdentityClaims() {
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+
+        UserLoginVO vo = userService.login(loginDto("miuxuer", RAW_PASSWORD));
+        Claims claims = JwtUtils.parseJwt(JWT_SECRET, vo.getToken());
+
+        // 拦截器就是靠这个 userId 确定"当前是谁"的
+        assertEquals(1001L, ((Number) claims.get(JwtClaimsConstant.USER_ID)).longValue());
+        assertEquals("miuxuer", claims.get(JwtClaimsConstant.USERNAME));
+        assertEquals(UserConstant.ROLE_USER, ((Number) claims.get(JwtClaimsConstant.ROLE)).intValue());
+        // 密码相关的任何东西都不能进 claims —— payload 只是 Base64，谁都能解
+        assertFalse(vo.getToken().contains("password"));
+        assertNull(claims.get("password"));
+    }
+
+    @Test
+    @DisplayName("密码错误 → 401，且提示不透露用户是否存在")
+    void login_wrongPassword_shouldThrowUnauthorized() {
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> userService.login(loginDto("miuxuer", "wrong-password")));
+
+        assertEquals(MessageConstant.LOGIN_FAILED, e.getMessage());
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+    }
+
+    @Test
+    @DisplayName("用户不存在 → 提示和密码错误完全相同，不给攻击者线索")
+    void login_userNotFound_shouldUseSameMessage() {
+        when(userMapper.selectOne(any())).thenReturn(null);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> userService.login(loginDto("nobody", RAW_PASSWORD)));
+
+        // 两种失败给同一句文案，否则等于白送一份有效用户名列表
+        assertEquals(MessageConstant.LOGIN_FAILED, e.getMessage());
+    }
+
+    @Test
+    @DisplayName("账号被禁用 → 403，且提示在密码校验之后才出现")
+    void login_disabledAccount_shouldThrowForbidden() {
+        when(userMapper.selectOne(any()))
+                .thenReturn(existingUser("miuxuer", UserConstant.STATUS_DISABLED));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> userService.login(loginDto("miuxuer", RAW_PASSWORD)));
+
+        assertEquals(MessageConstant.ACCOUNT_DISABLED, e.getMessage());
+        assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+    }
+
+    @Test
+    @DisplayName("禁用账号 + 密码也错 → 先报密码错，不泄露账号状态")
+    void login_disabledWithWrongPassword_shouldReportPasswordError() {
+        when(userMapper.selectOne(any()))
+                .thenReturn(existingUser("miuxuer", UserConstant.STATUS_DISABLED));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> userService.login(loginDto("miuxuer", "wrong-password")));
+
+        assertEquals(MessageConstant.LOGIN_FAILED, e.getMessage());
     }
 }
