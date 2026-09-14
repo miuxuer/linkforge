@@ -28,6 +28,18 @@ mybatis-plus:
       logic-delete-value: 1
       logic-not-delete-value: 0
 
+# ------------------------------------------------------------
+# 阿里云 OSS。AK/SK 不在这里 —— 走环境变量
+# OSS_ACCESS_KEY_ID / OSS_ACCESS_KEY_SECRET，由 SDK 的
+# EnvironmentVariableCredentialsProvider 直接读。
+# 写进这个文件等于把密钥一起提交到 GitHub。
+# ------------------------------------------------------------
+aliyun:
+  oss:
+    endpoint: https://oss-cn-beijing.aliyuncs.com
+    bucket-name: miuxuer
+    region: cn-beijing
+
 # 本项目自定义配置
 linkforge:
   # 拼接短链接前台展示用，换域名时改这里

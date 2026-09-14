@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.miuxuer</groupId>
+        <artifactId>linkforge</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>linkforge-oss-spring-boot-autoconfigure</artifactId>
+    <name>linkforge-oss-spring-boot-autoconfigure</name>
+    <description>OSS 自动配置：真正干活的模块，放配置类、属性绑定和工具类</description>
+
+    <!--
+      这是普通 jar，不是可执行 jar，所以不配 spring-boot-maven-plugin ——
+      它会被别的应用当依赖引进去，重打成 fat jar 反而会带来嵌套结构。
+    -->
+    <dependencies>
+        <!-- 自动配置要写的注解都在这里：@AutoConfiguration、@ConditionalOnMissingBean 等 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-autoconfigure</artifactId>
+        </dependency>
+
+        <!-- 阿里云 OSS V2 SDK，版本由父 pom 统一管 -->
+        <dependency>
+            <groupId>com.aliyun</groupId>
+            <artifactId>alibabacloud-oss-v2</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- 用 ApplicationContextRunner 测自动配置，比起整个应用快得多 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+</project>

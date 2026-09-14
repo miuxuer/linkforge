@@ -27,6 +27,8 @@
     <modules>
         <module>linkforge-common</module>
         <module>linkforge-pojo</module>
+        <module>linkforge-oss-spring-boot-autoconfigure</module>
+        <module>linkforge-oss-spring-boot-starter</module>
         <module>linkforge-server</module>
     </modules>
 
@@ -99,9 +101,14 @@
                 <version>${jjwt.version}</version>
             </dependency>
 
-            <!-- 阿里云 OSS V2 SDK -->
+            <!--
+              阿里云 OSS V2 SDK。
+              groupId 是 com.aliyun 而不是 com.aliyun.oss —— 后者虽然看着更合理，
+              但在仓库里根本不存在，写错了要到第一次引用的模块编译时才会报
+              "Could not find artifact"。版本 0.5.1 是参考项目在 Boot 4 下验证过的。
+            -->
             <dependency>
-                <groupId>com.aliyun.oss</groupId>
+                <groupId>com.aliyun</groupId>
                 <artifactId>alibabacloud-oss-v2</artifactId>
                 <version>${alibabacloud-oss.version}</version>
             </dependency>

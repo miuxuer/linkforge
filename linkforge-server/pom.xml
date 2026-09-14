@@ -26,6 +26,15 @@
             <artifactId>linkforge-pojo</artifactId>
             <version>${project.version}</version>
         </dependency>
+        <!--
+          只引 starter 这一个坐标，不引 autoconfigure —— 到底用了哪个 SDK、
+          有几个自动配置类，使用方不需要知道。这是 starter 拆两个模块的意义。
+        -->
+        <dependency>
+            <groupId>com.miuxuer</groupId>
+            <artifactId>linkforge-oss-spring-boot-starter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
 
         <!-- 三方依赖不写 version，全部由父 pom 的 dependencyManagement 或 Boot 决定 -->
         <!--

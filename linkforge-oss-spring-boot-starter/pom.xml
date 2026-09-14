@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.miuxuer</groupId>
+        <artifactId>linkforge</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>linkforge-oss-spring-boot-starter</artifactId>
+    <name>linkforge-oss-spring-boot-starter</name>
+    <description>OSS starter 空壳：只有依赖声明，没有任何代码</description>
+
+    <!--
+      这个模块一行代码都没有，它的全部意义就是"把该引的东西引全"。
+
+      为什么要拆成两个模块（本模块 + autoconfigure）：
+      starter 面向使用者，autoconfigure 面向实现。使用者只引 starter，
+      不需要知道里面用了哪个 SDK、有几个配置类。以后换掉底层实现
+      （比如改用 MinIO），只动 autoconfigure，引用方一行都不用改。
+
+      这也是 Spring Boot 官方 starter 的统一做法：
+      spring-boot-starter-data-redis 是个空壳，
+      真正的自动配置在 spring-boot-data-redis 里。
+
+      跨模块依赖必须显式写 version（父 dependencyManagement 里不登记内部模块）。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>com.miuxuer</groupId>
+            <artifactId>linkforge-oss-spring-boot-autoconfigure</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+    </dependencies>
+
+</project>
