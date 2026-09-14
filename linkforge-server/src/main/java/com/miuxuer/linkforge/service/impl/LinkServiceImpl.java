@@ -104,7 +104,7 @@ public class LinkServiceImpl implements LinkService {
 
     @Override
     public LinkVO createLink(LinkCreateDTO dto) {
-        Long userId = requireCurrentUserId();
+        Long userId = CurrentHolder.requireCurrentId();
 
         // 号段模式：先从内存取一个 id，Base62 转成短码，一次 INSERT 落地。
         // 一条语句就写完，没有"先插后改"的中间状态。
@@ -137,7 +137,7 @@ public class LinkServiceImpl implements LinkService {
 
     @Override
     public PageResult<LinkVO> pageMyLinks(LinkPageQueryDTO dto) {
-        Long userId = requireCurrentUserId();
+        Long userId = CurrentHolder.requireCurrentId();
 
         Page<Link> pageParam = new Page<>(dto.getPage(), dto.getPageSize());
 
@@ -174,7 +174,7 @@ public class LinkServiceImpl implements LinkService {
 
     @Override
     public void updateLink(Long id, LinkUpdateDTO dto) {
-        Long userId = requireCurrentUserId();
+        Long userId = CurrentHolder.requireCurrentId();
         Link existing = requireOwnedLink(id, userId);
 
         // 用 wrapper 显式 .set 而不是 updateById：updateById 会把实体里为 null 的字段
@@ -209,7 +209,7 @@ public class LinkServiceImpl implements LinkService {
 
     @Override
     public void deleteLink(Long id) {
-        Long userId = requireCurrentUserId();
+        Long userId = CurrentHolder.requireCurrentId();
         Link existing = requireOwnedLink(id, userId);
 
         // 逻辑删除：@TableLogic 会把 delete 改写成 UPDATE ... SET deleted = 1。
@@ -227,7 +227,7 @@ public class LinkServiceImpl implements LinkService {
 
     @Override
     public byte[] generateQrCode(Long id, int size) {
-        Long userId = requireCurrentUserId();
+        Long userId = CurrentHolder.requireCurrentId();
         Link link = requireOwnedLink(id, userId);
 
         // 二维码里放完整短链接，不是短码 —— 扫出来要能直接打开
@@ -300,20 +300,6 @@ public class LinkServiceImpl implements LinkService {
         stringRedisTemplate.delete(RedisKeyConstant.LINK_CACHE + shortCode);
     }
 
-    /**
-     * 取当前登录用户 id，取不到直接拒绝。
-     *
-     * <p>能走到这里说明拦截器没生效（路径没注册、白名单配错），属于配置问题；
-     * 但对用户来说结果一样，按未登录处理。写成方法是为了让每个需要身份的地方
-     * 都走同一处判断，而不是各写各的 null 检查。
-     */
-    private Long requireCurrentUserId() {
-        Long userId = CurrentHolder.getCurrentId();
-        if (userId == null) {
-            throw new BusinessException(ResultCode.UNAUTHORIZED, MessageConstant.NOT_LOGGED_IN);
-        }
-        return userId;
-    }
 
     @Override
     public String getOriginalUrl(String shortCode) {

@@ -1,5 +1,9 @@
 package com.miuxuer.linkforge.context;
 
+import com.miuxuer.linkforge.constant.MessageConstant;
+import com.miuxuer.linkforge.exception.BusinessException;
+import com.miuxuer.linkforge.result.ResultCode;
+
 /**
  * 当前登录用户的上下文，基于 {@link ThreadLocal}。
  *
@@ -42,6 +46,27 @@ public final class CurrentHolder {
     /** 取当前用户 id。未登录时返回 null。 */
     public static Long getCurrentId() {
         return CURRENT_ID.get();
+    }
+
+    /**
+     * 取当前用户 id，没有就抛"未登录"。
+     *
+     * <p>给"没有登录用户就没法继续"的场景用。每个需要身份的地方都写一遍
+     * {@code if (id == null) throw ...} 的话，总有一处会漏 ——
+     * 而漏掉的那一处就是"userId 为 null 查出了全站数据"或者
+     * "插了一条 userId 为 null 的脏数据"。
+     *
+     * <p>能走到这里说明拦截器没生效（路径没注册、白名单配错），属于配置问题；
+     * 但对用户来说结果一样，按未登录处理。
+     *
+     * @throws com.miuxuer.linkforge.exception.BusinessException 未登录
+     */
+    public static Long requireCurrentId() {
+        Long id = CURRENT_ID.get();
+        if (id == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, MessageConstant.NOT_LOGGED_IN);
+        }
+        return id;
     }
 
     public static void setCurrentRole(Integer role) {
