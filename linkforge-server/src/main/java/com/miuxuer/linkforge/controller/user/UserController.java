@@ -1,5 +1,6 @@
 package com.miuxuer.linkforge.controller.user;
 
+import com.miuxuer.linkforge.annotation.OperateLog;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
 import com.miuxuer.linkforge.dto.UserRegisterDTO;
 import com.miuxuer.linkforge.result.Result;
@@ -35,6 +36,8 @@ public class UserController {
      * {@code MethodArgumentNotValidException}，由 GlobalExceptionHandler 统一转成 400。
      */
     @PostMapping("/register")
+    // 打 @OperateLog 的方法会被切面记录入参、返回值、耗时和异常到 t_operate_log
+    @OperateLog
     public Result<Void> register(@RequestBody @Valid UserRegisterDTO dto) {
         userService.register(dto);
         return Result.success();
@@ -47,6 +50,9 @@ public class UserController {
      * 拦截器里要把它放进白名单。
      */
     @PostMapping("/login")
+    // 登录入参里有明文密码，切面会把 password 字段脱敏成 ****** 再落库。
+    // 没有这层脱敏就不能给登录接口加日志 —— 等于把密码明文抄一份进日志表。
+    @OperateLog
     public Result<UserLoginVO> login(@RequestBody @Valid UserLoginDTO dto) {
         return Result.success(userService.login(dto));
     }
