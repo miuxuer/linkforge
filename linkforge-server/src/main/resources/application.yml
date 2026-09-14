@@ -32,6 +32,16 @@ mybatis-plus:
 linkforge:
   # 拼接短链接前台展示用，换域名时改这里
   domain: http://localhost:8080
+  jwt:
+    # 签名密钥。和数据库密码同理：值放环境变量，绝不落进这个文件 ——
+    # 这个文件是要提交到 GitHub 的，密钥一旦公开，任何人都能签出合法 token
+    # 冒充任意用户，整套认证直接失效。
+    # 要求：长度 ≥ 32 字节，短了 jjwt 会拒绝（HS256 不允许弱密钥）。
+    secret-key: ${JWT_SECRET}
+    # 有效期 7 天（毫秒）。JWT 签发后无法主动作废，有效期越长风险窗口越大
+    ttl: 604800000
+    # 前端携带 token 的请求头名字
+    token-name: token
   bloom:
     # 预期短链总数，决定布隆过滤器 bit 数组大小
     expected-insertions: 1000000

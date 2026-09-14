@@ -20,6 +20,38 @@
       避免现在挂一堆编译期用不上的包。
     -->
     <dependencies>
+        <!--
+          本模块要写 @ConfigurationProperties / @Component 这类 Spring 注解，
+          所以需要 Spring 基础包。引 starter 而不是逐个引 spring-context + spring-boot，
+          是因为后续还要加 spring-web（工具类要读请求上下文）等，逐个列容易漏。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+        </dependency>
+
+        <!--
+          JJWT 三件套的分工，scope 不能写错：
+          - api     编译期：Jwts / Claims 这些接口在这里，写代码只需要它
+          - impl    运行期：真正的签名、解析实现，编译时用不到，放 compile 只是污染传递依赖
+          - jackson 运行期：负责把 claims 序列化成 JSON。JJWT 只提供接口，
+                    具体用哪个 JSON 库由这个包决定（也有 jjwt-gson 可选）
+        -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
