@@ -62,6 +62,19 @@ public class LinkController {
     }
 
     /**
+     * 查单条短链。
+     *
+     * <p>路径 {@code /{id}} 和上面的 {@code /page}、下面的 {@code /stat/**} 不冲突：
+     * {@code page} 和 {@code stat} 都是字面量，比路径变量更具体，Spring 会优先匹配它们。
+     * 但这也意味着 {@code /api/link/abc} 这种非数字的 id 会落到这里然后报类型转换错误 ——
+     * 前端传 id 时要注意。
+     */
+    @GetMapping("/{id}")
+    public Result<LinkVO> detail(@PathVariable Long id) {
+        return Result.success(linkService.getLink(id));
+    }
+
+    /**
      * 修改短链（标题、备注、启停、过期时间）。
      *
      * <p>路径里的 {@code id} 是短链主键，Service 会校验它属于当前登录用户 ——

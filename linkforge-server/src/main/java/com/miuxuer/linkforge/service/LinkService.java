@@ -39,6 +39,17 @@ public interface LinkService {
     PageResult<LinkVO> pageMyLinks(LinkPageQueryDTO dto);
 
     /**
+     * 查单条短链。
+     *
+     * <p>详情页需要它。没有这个接口的话前端只能"翻分页列表再按 id 找"，
+     * 而分页有每页上限 —— 短链超过一页的用户会打不开自己的详情页。
+     *
+     * @throws com.miuxuer.linkforge.exception.LinkNotFoundException 短链不存在
+     * @throws com.miuxuer.linkforge.exception.BusinessException     短链不属于当前用户
+     */
+    LinkVO getLink(Long id);
+
+    /**
      * 修改自己的短链（标题、备注、状态、过期时间）。
      *
      * <p>整条覆盖语义：没传的字段会被写成 null，见 {@link LinkUpdateDTO}。

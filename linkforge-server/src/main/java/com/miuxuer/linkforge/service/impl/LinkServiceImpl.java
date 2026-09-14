@@ -176,6 +176,12 @@ public class LinkServiceImpl implements LinkService {
     }
 
     @Override
+    public LinkVO getLink(Long id) {
+        Long userId = CurrentHolder.requireCurrentId();
+        return LinkVO.from(requireOwnedLink(id, userId), linkProperties.getDomain());
+    }
+
+    @Override
     public void updateLink(Long id, LinkUpdateDTO dto) {
         Long userId = CurrentHolder.requireCurrentId();
         Link existing = requireOwnedLink(id, userId);
