@@ -12,6 +12,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.util.Objects;
@@ -103,6 +104,23 @@ public class GlobalExceptionHandler {
         log.warn("请求参数解码失败（客户端编码可能不是 UTF-8）: {}", e.getMessage());
         return ResponseEntity.status(ResultCode.PARAM_ERROR.getHttpStatus())
                 .body(Result.error(ResultCode.PARAM_ERROR, "请求参数编码不正确，请使用 UTF-8 编码"));
+    }
+
+    /**
+     * 上传文件超过大小限制。
+     *
+     * <p>由 {@code spring.servlet.multipart.max-file-size} 触发，Tomcat 在解析
+     * multipart 请求时就抛出来了。不单独接住的话会掉进兜底分支变成 500 ——
+     * 但用户传了个 20MB 的图片显然不是"服务器内部错误"，监控也不该把它计入故障率。
+     *
+     * <p>用 413（Payload Too Large）而不是笼统的 400：这个状态码就是为"请求体太大"
+     * 设计的，前端可以据此给出"图片太大，请压缩后再传"这种具体提示。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<Result<Void>> handleMaxUploadSize(MaxUploadSizeExceededException e) {
+        log.warn("上传文件超过限制: {}", e.getMessage());
+        return ResponseEntity.status(ResultCode.PAYLOAD_TOO_LARGE.getHttpStatus())
+                .body(Result.error(ResultCode.PAYLOAD_TOO_LARGE));
     }
 
     /**

@@ -8,6 +8,16 @@ spring:
   profiles:
     # 默认走 dev。IDEA 里也可以加 --spring.profiles.active=prod 覆盖
     active: dev
+  servlet:
+    multipart:
+      # 单文件上限。超了 Tomcat 在解析请求阶段就拒绝，不会读进内存再判断 ——
+      # 那样一个 2GB 的请求足以把服务打挂
+      max-file-size: 10MB
+      # 整个请求的上限（多文件一起传时按总和算）
+      max-request-size: 100MB
+      # 超过这个大小就写到磁盘临时文件，不再放内存。
+      # 图片一般不大，1MB 以内走内存更快；调太小会让正常图片也反复读写磁盘
+      file-size-threshold: 1MB
 
 server:
   port: 8080

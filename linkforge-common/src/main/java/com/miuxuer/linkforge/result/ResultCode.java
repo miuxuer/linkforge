@@ -30,6 +30,7 @@ public enum ResultCode {
     UNAUTHORIZED(401, 401, "未登录或登录已过期"),
     FORBIDDEN(403, 403, "没有访问权限"),
     NOT_FOUND(404, 404, "请求的资源不存在"),
+    PAYLOAD_TOO_LARGE(413, 413, "上传内容过大"),
     TOO_MANY_REQUESTS(429, 429, "请求过于频繁，请稍后重试"),
 
     /* ---------- 业务级错误：code 从 4000 起，避免和 HTTP 状态码混淆 ---------- */

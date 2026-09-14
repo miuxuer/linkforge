@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -105,6 +106,20 @@ class GlobalExceptionHandlerTest {
         assertEquals(400, response.getStatusCode().value());
         assertTrue(response.getStatusCode().is4xxClientError());
         assertEquals(ResultCode.PARAM_ERROR.getCode(), response.getBody().getCode());
+    }
+
+    @Test
+    @DisplayName("上传文件超限 → 413，而不是 500")
+    void maxUploadSizeExceeded_shouldReturn413() {
+        // 用户传了个 20MB 的图片显然不是"服务器内部错误"，
+        // 落进兜底分支会污染错误率，前端也拿不到可用的提示
+        MaxUploadSizeExceededException e =
+                new MaxUploadSizeExceededException(10 * 1024 * 1024L);
+
+        ResponseEntity<Result<Void>> response = handler.handleMaxUploadSize(e);
+
+        assertEquals(413, response.getStatusCode().value());
+        assertEquals(ResultCode.PAYLOAD_TOO_LARGE.getCode(), response.getBody().getCode());
     }
 
     @Test
