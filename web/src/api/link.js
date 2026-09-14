@@ -10,6 +10,11 @@ export function getLinkPage(params) {
   return request.get('/link/page', { params })
 }
 
+/** 查单条短链。 */
+export function getLink(id) {
+  return request.get(`/link/${id}`)
+}
+
 /** 修改短链（整条覆盖语义，没传的字段会被清空）。 */
 export function updateLink(id, data) {
   return request.put(`/link/${id}`, data)

@@ -38,10 +38,16 @@ request.interceptors.request.use((config) => {
  */
 request.interceptors.response.use(
   (response) => {
+    // 二进制响应（二维码图片等）没有 {code, message, data} 这层包装，
+    // 原样返回，不能去解 .data —— 那会得到 undefined
+    const contentType = response.headers['content-type'] || ''
+    if (!contentType.includes('application/json')) {
+      return response.data
+    }
+
     const body = response.data
 
-    // 后端约定 code=0 表示成功。注意这里是"HTTP 200 但业务失败"的情况 ——
-    // 有些接口（比如导出）会返回 200 但 code 非 0
+    // 后端约定 code=0 表示成功。注意这里是"HTTP 200 但业务失败"的情况
     if (body && typeof body.code === 'number' && body.code !== 0) {
       ElMessage.error(body.message || '请求失败')
       return Promise.reject(new Error(body.message || '请求失败'))
@@ -52,7 +58,11 @@ request.interceptors.response.use(
   (error) => {
     // 没有 response 说明请求压根没发出去或超时了
     const status = error.response?.status
-    const message = error.response?.data?.message
+    // 请求时指定了 responseType: 'blob' 的话，出错时错误体也是 Blob，
+    // 这里取不到 message（要异步读 Blob 才行）。这种请求就按状态码给通用提示，
+    // 反正图片加载失败时用户最需要知道的是"是不是没登录"
+    const message =
+      error.response?.data instanceof Blob ? null : error.response?.data?.message
 
     if (status === 401) {
       // token 无效或过期。清掉本地状态并回登录页。
