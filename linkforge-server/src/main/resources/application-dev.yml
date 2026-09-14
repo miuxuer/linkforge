@@ -1,0 +1,37 @@
+# ============================================================
+# 开发环境配置。
+#
+# 密码一律走环境变量，不写进文件 —— 这个文件是要提交到 GitHub 的，
+# 密码写进来等于公开。启动前在 IDEA 的运行配置里设：
+#   DB_PASSWORD=xxx
+# 命令行启动则：DB_PASSWORD=xxx mvn -pl linkforge-server spring-boot:run
+#
+# 注意这里写的是 ${DB_PASSWORD} 而不是 ${DB_PASSWORD:123456}：
+# 给默认值虽然方便，但环境变量忘了设时会静默用默认值连库，
+# 排查半天才发现连错了。不给默认值就是让它启动即报错。
+# ============================================================
+spring:
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://localhost:3306/linkforge?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true&rewriteBatchedStatements=true
+    username: root
+    password: ${DB_PASSWORD}
+    hikari:
+      # 连接池上限。本地开发 10 个足够；生产要按 DB 的 max_connections 反推
+      maximum-pool-size: 10
+      # 从池里拿连接的等待上限，超时抛异常而不是无限等
+      connection-timeout: 3000
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      # 本地 Redis 一般没设密码，留空即可
+      password:
+      timeout: 2000ms
+      lettuce:
+        pool:
+          max-active: 16
+          max-idle: 8
+          min-idle: 2

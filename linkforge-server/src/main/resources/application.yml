@@ -1,0 +1,48 @@
+# ============================================================
+# 通用配置。跟环境无关的放这里，跟环境有关的放 application-{profile}.yml。
+# 这样换环境只要切 profile，不用改这个文件。
+# ============================================================
+spring:
+  application:
+    name: linkforge
+  profiles:
+    # 默认走 dev。IDEA 里也可以加 --spring.profiles.active=prod 覆盖
+    active: dev
+
+server:
+  port: 8080
+
+mybatis-plus:
+  configuration:
+    # 数据库的 short_code 自动映射到 Java 的 shortCode
+    map-underscore-to-camel-case: true
+    # 开发期把 SQL 打出来。上线要换成 NoLoggingImpl，否则刷屏 + 有性能开销
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    banner: false
+    db-config:
+      # 主键由号段模式自己分配，不让 MyBatis-Plus 用雪花算法生成
+      id-type: input
+      # 逻辑删除字段的全局约定，实体上再打 @TableLogic 生效
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+
+# 本项目自定义配置
+linkforge:
+  # 拼接短链接前台展示用，换域名时改这里
+  domain: http://localhost:8080
+  bloom:
+    # 预期短链总数，决定布隆过滤器 bit 数组大小
+    expected-insertions: 1000000
+    # 可接受的假阳性率：1% 表示 100 个不存在的短码里有 1 个会穿到 DB
+    fpp: 0.01
+  ratelimit:
+    # 滑动窗口：每个 IP 在 60 秒内最多 100 次跳转
+    window-seconds: 60
+    max-requests: 100
+
+logging:
+  level:
+    root: info
+    com.miuxuer.linkforge: debug
