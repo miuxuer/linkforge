@@ -52,6 +52,16 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!--
+          密码哈希用。只引 spring-security-crypto 这一个 jar，不是 spring-boot-starter-security
+          —— starter 会把整条过滤器链拉进来，默认给所有接口套上 HTTP Basic 认证和登录页，
+          跟本项目自己写的 JWT 拦截器打架。这里只要 BCrypt 算法本身。
+        -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>

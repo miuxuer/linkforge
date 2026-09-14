@@ -31,6 +31,16 @@
             <artifactId>mybatis-plus-annotation</artifactId>
         </dependency>
 
+        <!--
+          DTO 上要打 @NotBlank / @Size 做入参校验，只需要校验注解这一个包。
+          引 spring-boot-starter-validation 会把 hibernate-validator 实现也带进 pojo，
+          而 pojo 在依赖链底层，会传递给所有依赖它的模块。
+        -->
+        <dependency>
+            <groupId>jakarta.validation</groupId>
+            <artifactId>jakarta.validation-api</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
