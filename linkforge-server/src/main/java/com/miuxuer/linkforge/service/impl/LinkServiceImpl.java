@@ -83,6 +83,7 @@ public class LinkServiceImpl implements LinkService {
     private final IdSegmentManager idSegmentManager;
     private final LinkProperties linkProperties;
     private final OssImageLoader ossImageLoader;
+    private final LinkCacheEvictor linkCacheEvictor;
 
     /** 可选依赖：Redis 不可用时自动降级为纯 DB 模式。 */
     @Autowired(required = false)
@@ -95,11 +96,13 @@ public class LinkServiceImpl implements LinkService {
     public LinkServiceImpl(LinkMapper linkMapper,
                            IdSegmentManager idSegmentManager,
                            LinkProperties linkProperties,
-                           OssImageLoader ossImageLoader) {
+                           OssImageLoader ossImageLoader,
+                           LinkCacheEvictor linkCacheEvictor) {
         this.linkMapper = linkMapper;
         this.idSegmentManager = idSegmentManager;
         this.linkProperties = linkProperties;
         this.ossImageLoader = ossImageLoader;
+        this.linkCacheEvictor = linkCacheEvictor;
     }
 
     @Override
@@ -204,7 +207,7 @@ public class LinkServiceImpl implements LinkService {
         // 改了状态或过期时间之后，缓存里那条"能跳转"的旧结果就过期了。
         // 不删的话，被停用的短链在被缓存命中的情况下还能继续跳 ——
         // 用户以为停用生效了，实际没有。
-        evictCache(existing.getShortCode());
+        linkCacheEvictor.evict(existing.getShortCode());
     }
 
     @Override
@@ -222,7 +225,7 @@ public class LinkServiceImpl implements LinkService {
         }
 
         log.info("短链已删除: id={}, userId={}", id, userId);
-        evictCache(existing.getShortCode());
+        linkCacheEvictor.evict(existing.getShortCode());
     }
 
     @Override
@@ -284,20 +287,6 @@ public class LinkServiceImpl implements LinkService {
             throw new BusinessException(ResultCode.FORBIDDEN, MessageConstant.LINK_NOT_OWNED);
         }
         return existing;
-    }
-
-    /**
-     * 清掉某个短码的跳转缓存。
-     *
-     * <p>只删缓存，不动布隆过滤器 —— 布隆是"可能存在"的数据结构，删不掉元素。
-     * 短码留在布隆里完全没问题：它只是让请求继续往下走，最终由缓存/数据库判断有效性，
-     * 不会导致已停用的短链被放行。
-     */
-    private void evictCache(String shortCode) {
-        if (stringRedisTemplate == null || shortCode == null) {
-            return;
-        }
-        stringRedisTemplate.delete(RedisKeyConstant.LINK_CACHE + shortCode);
     }
 
 

@@ -101,6 +101,9 @@ class LinkServiceImplTest {
     @Mock
     private OssImageLoader ossImageLoader;
 
+    @Mock
+    private LinkCacheEvictor linkCacheEvictor;
+
     private LinkProperties linkProperties;
 
     private LinkServiceImpl linkService;
@@ -129,7 +132,7 @@ class LinkServiceImplTest {
         linkProperties = new LinkProperties();
         linkProperties.setDomain("http://localhost:8080");
 
-        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
+        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
         // 这两个是 @Autowired(required = false) 的可选依赖，构造器注不进去，
         // 测试里手动塞进去
         ReflectionTestUtils.setField(linkService, "stringRedisTemplate", stringRedisTemplate);
@@ -331,7 +334,7 @@ class LinkServiceImplTest {
     @DisplayName("Redis 与布隆过滤器都没配上 → 纯 DB 模式仍能正常返回")
     void withoutRedisAndBloom_shouldDegradeToDb() {
         // 不走 @InjectMocks，自己 new 一个不注入可选依赖的实例
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
         when(linkMapper.selectOne(any())).thenReturn(link("plain1", "https://www.degraded.com"));
 
         assertEquals("https://www.degraded.com", degraded.getOriginalUrl("plain1"));
@@ -352,7 +355,7 @@ class LinkServiceImplTest {
     @Test
     @DisplayName("Redis 不可用 → 计数直接跳过，不抛异常拖垮跳转")
     void incrementVisitCount_withoutRedis_shouldNotThrow() {
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
 
         degraded.incrementVisitCount("abc123");
     }
@@ -593,7 +596,7 @@ class LinkServiceImplTest {
 
         // 用户把短链停用了，但缓存里还存着"能跳"的旧结果 ——
         // 不清掉的话，停用动作要等缓存自然过期才生效
-        verify(stringRedisTemplate).delete(CACHE_KEY + "abc");
+        verify(linkCacheEvictor).evict("abc");
     }
 
     @Test
@@ -637,7 +640,7 @@ class LinkServiceImplTest {
         String sql = captor.getValue().getSqlSegment();
         assertTrue(sql.contains("user_id"), "DELETE 少了 user_id 条件，能删掉别人的短链: " + sql);
         // 缓存也要清，否则已删除的短链还能被跳转
-        verify(stringRedisTemplate).delete(CACHE_KEY + "abc");
+        verify(linkCacheEvictor).evict("abc");
     }
 
     @Test
