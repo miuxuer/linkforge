@@ -152,6 +152,32 @@ class UserStatusCheckerTest {
         verify(userMapper).selectById(USER_ID);
     }
 
+    @Test
+    @DisplayName("★ Redis 连不上（抛异常）→ 回退查库，而不是让调用方 500")
+    void redisThrows_shouldFallBackToDatabase() {
+        // 这一条是集成测试逼出来的：单元测试里的 mock 永远不抛异常，
+        // 所以"Redis 进程挂了 / 网络断了"这条路径在单元测试里根本覆盖不到。
+        //
+        // 而 isEnabled 是在拦截器里调的 —— 一旦让异常冒出去，
+        // 结果就是"Redis 一挂，所有需要登录的接口全部 500"
+        when(valueOperations.get(CACHE_KEY)).thenThrow(new RuntimeException("Connection refused"));
+        when(userMapper.selectById(USER_ID)).thenReturn(user(StatusConstant.ENABLED));
+
+        assertThat(checker.isEnabled(USER_ID)).isTrue();
+        verify(userMapper).selectById(USER_ID);
+    }
+
+    @Test
+    @DisplayName("读缓存失败时写入缓存也会失败 → 不影响判断结果")
+    void redisThrowsOnBothReadAndWrite_shouldStillWork() {
+        when(valueOperations.get(CACHE_KEY)).thenThrow(new RuntimeException("Connection refused"));
+        when(userMapper.selectById(USER_ID)).thenReturn(user(StatusConstant.DISABLED));
+        org.mockito.Mockito.doThrow(new RuntimeException("Connection refused"))
+                .when(valueOperations).set(anyString(), anyString(), any(Duration.class));
+
+        assertThat(checker.isEnabled(USER_ID)).isFalse();
+    }
+
     // ==================== 清缓存 ====================
 
     @Test
@@ -171,5 +197,15 @@ class UserStatusCheckerTest {
         // 数据库已经改了，缓存过期后自然会刷新
         checker.evict(USER_ID);
         verify(stringRedisTemplate, never()).delete(anyString());
+    }
+
+    @Test
+    @DisplayName("★ evict 时 Redis 抛异常 → 吞掉，不能让「禁用用户」这个操作失败")
+    void evict_redisThrows_shouldNotPropagate() {
+        when(stringRedisTemplate.delete(CACHE_KEY)).thenThrow(new RuntimeException("Connection refused"));
+
+        // 数据库里状态已经改好了，清缓存失败只是"禁用晚 60 秒生效"，
+        // 不该把整个操作报成失败 —— 那样管理员会反复重试，而每次都改成功、都报失败
+        checker.evict(USER_ID);
     }
 }

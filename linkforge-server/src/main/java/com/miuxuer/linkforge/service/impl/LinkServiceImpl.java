@@ -305,54 +305,84 @@ public class LinkServiceImpl implements LinkService {
         }
 
         // 第二层：Redis 缓存
+        //
+        // ★ 整块包在 try-catch 里。注释里写的"Redis 挂了自动降级为纯 DB 模式"
+        // 靠 `stringRedisTemplate != null` 是不够的 —— 那只覆盖了"没配 Redis"，
+        // 覆盖不了"配了但连不上"。后者才是真正会发生的情况：Redis 进程挂了、
+        // 网络断了、连接池耗尽，这时 opsForValue().get() 会直接抛异常，
+        // 结果是跳转接口 500 而不是降级。
+        //
+        // 缓存是性能优化，不该成为可用性的单点。异常了就落到最后的直查库。
         if (stringRedisTemplate != null) {
-            String cacheKey = RedisKeyConstant.LINK_CACHE + shortCode;
-            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            try {
+                String result = queryWithCache(shortCode);
+                if (result != null) {
+                    return result;
+                }
+            } catch (Exception e) {
+                log.warn("缓存层异常，降级直查库: shortCode={}", shortCode, e);
+            }
+        }
+
+        // 第四层：兜底直查库（Redis 不可用、抢锁重试耗尽、或缓存层本身出异常时走这里）
+        return queryDbDirect(shortCode);
+    }
+
+    /**
+     * 走缓存的那一段：查缓存 → 抢锁 → 查库回填。
+     *
+     * <p>抽出来是为了让 {@link #getOriginalUrl} 能用一层 try-catch 把整块兜住 ——
+     * 散在主流程里的话，每调一次 Redis 都要单独判断一次异常，很容易漏。
+     *
+     * @return 命中或查库得到的原始链接；确认不存在时返回 null
+     */
+    private String queryWithCache(String shortCode) {
+        String cacheKey = RedisKeyConstant.LINK_CACHE + shortCode;
+        String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+
+        // 第三层：互斥锁防击穿。缓存刚失效时可能有大量请求同时到达，
+        // 只让抢到锁的那一个去查库，其它线程等它把缓存回填好再读。
+        String lockKey = RedisKeyConstant.LINK_LOCK + shortCode;
+        for (int i = 0; i < MAX_RETRIES; i++) {
+            // SETNX + TTL 一步完成：既保证只有一个线程拿到锁，又保证锁不会永久残留
+            Boolean locked = stringRedisTemplate.opsForValue()
+                    .setIfAbsent(lockKey, "1", Duration.ofSeconds(LOCK_TTL_SECONDS));
+            if (Boolean.TRUE.equals(locked)) {
+                try {
+                    // Double-check：抢锁期间可能已经有别的线程重建好了缓存，
+                    // 不检查就会白白多查一次库 —— 这正是锁要避免的事情。
+                    cached = stringRedisTemplate.opsForValue().get(cacheKey);
+                    if (cached != null) {
+                        return cached;
+                    }
+                    return queryDbAndCache(shortCode, cacheKey);
+                } finally {
+                    // 放锁必须放在 finally：中途抛异常也要释放，
+                    // 否则只能干等 TTL 到期，这期间该短码的所有请求都拿不到锁。
+                    stringRedisTemplate.delete(lockKey);
+                }
+            }
+
+            // 没抢到锁：等一小会儿再看缓存，多半已经被持锁线程填好了
+            try {
+                Thread.sleep(RETRY_DELAY_MS);
+            } catch (InterruptedException e) {
+                // 恢复中断标记后退出，不要吞掉 —— 否则上层不知道被中断过
+                Thread.currentThread().interrupt();
+                break;
+            }
+            cached = stringRedisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 return cached;
             }
-
-            // 第三层：互斥锁防击穿。缓存刚失效时可能有大量请求同时到达，
-            // 只让抢到锁的那一个去查库，其它线程等它把缓存回填好再读。
-            String lockKey = RedisKeyConstant.LINK_LOCK + shortCode;
-            for (int i = 0; i < MAX_RETRIES; i++) {
-                // SETNX + TTL 一步完成：既保证只有一个线程拿到锁，又保证锁不会永久残留
-                Boolean locked = stringRedisTemplate.opsForValue()
-                        .setIfAbsent(lockKey, "1", Duration.ofSeconds(LOCK_TTL_SECONDS));
-                if (Boolean.TRUE.equals(locked)) {
-                    try {
-                        // Double-check：抢锁期间可能已经有别的线程重建好了缓存，
-                        // 不检查就会白白多查一次库 —— 这正是锁要避免的事情。
-                        cached = stringRedisTemplate.opsForValue().get(cacheKey);
-                        if (cached != null) {
-                            return cached;
-                        }
-                        return queryDbAndCache(shortCode, cacheKey);
-                    } finally {
-                        // 放锁必须放在 finally：中途抛异常也要释放，
-                        // 否则只能干等 TTL 到期，这期间该短码的所有请求都拿不到锁。
-                        stringRedisTemplate.delete(lockKey);
-                    }
-                }
-
-                // 没抢到锁：等一小会儿再看缓存，多半已经被持锁线程填好了
-                try {
-                    Thread.sleep(RETRY_DELAY_MS);
-                } catch (InterruptedException e) {
-                    // 恢复中断标记后退出，不要吞掉 —— 否则上层不知道被中断过
-                    Thread.currentThread().interrupt();
-                    break;
-                }
-                cached = stringRedisTemplate.opsForValue().get(cacheKey);
-                if (cached != null) {
-                    return cached;
-                }
-            }
-            log.warn("互斥锁重试耗尽，降级直查库: {}", shortCode);
         }
+        log.warn("互斥锁重试耗尽，降级直查库: {}", shortCode);
 
-        // 第四层：兜底直查库（Redis 不可用或抢锁重试耗尽时走这里）
-        return queryDbDirect(shortCode);
+        // 缓存层没给出结果（抢锁重试耗尽）。返回 null 让上层走直查库兜底
+        return null;
     }
 
     /**

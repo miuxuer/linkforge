@@ -138,7 +138,16 @@ public class StatServiceImpl implements StatService {
         List<String> keys = shortCodes.stream()
                 .map(code -> RedisKeyConstant.LINK_VISITS + code)
                 .toList();
-        List<String> values = stringRedisTemplate.opsForValue().multiGet(keys);
+
+        List<String> values;
+        try {
+            values = stringRedisTemplate.opsForValue().multiGet(keys);
+        } catch (Exception e) {
+            // Redis 连不上时只报"已同步到数据库的部分"，而不是让整个看板 500。
+            // 数字偏小是可以接受的，看板打不开不能接受
+            log.warn("读取未同步增量失败，本次按 0 处理: {}", e.getMessage());
+            return Map.of();
+        }
 
         // MGET 正常情况下会按请求顺序返回等长列表。数量对不上的话，
         // 继续按索引配对就会把增量和短码配错 —— "A 的 5 次算到 B 头上"，

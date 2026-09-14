@@ -71,18 +71,13 @@ public class UserStatusChecker {
 
         String cacheKey = RedisKeyConstant.USER_STATUS + userId;
 
-        if (stringRedisTemplate != null) {
-            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
-            if (DISABLED_FLAG.equals(cached)) {
-                return false;
-            }
-            if (ENABLED_FLAG.equals(cached)) {
-                return true;
-            }
+        Boolean cached = readCache(cacheKey);
+        if (cached != null) {
+            return cached;
         }
 
         // 缓存没命中（或 Redis 不可用），回查数据库
-        return loadAndCache(userId, cacheKey);
+        return loadFromDatabase(userId, cacheKey);
     }
 
     /**
@@ -95,22 +90,70 @@ public class UserStatusChecker {
         if (stringRedisTemplate == null || userId == null) {
             return;
         }
-        stringRedisTemplate.delete(RedisKeyConstant.USER_STATUS + userId);
+        try {
+            stringRedisTemplate.delete(RedisKeyConstant.USER_STATUS + userId);
+        } catch (Exception e) {
+            // 数据库里的状态已经改好了，缓存过期后自然会刷新。
+            // 不能因为"清缓存失败"就让"禁用用户"这个操作整个失败
+            log.warn("清除用户状态缓存失败（状态本身已更新，缓存会自动过期）: userId={}", userId, e);
+        }
     }
 
-    private boolean loadAndCache(Long userId, String cacheKey) {
+    /**
+     * 读缓存。
+     *
+     * @return 缓存命中时返回 true/false；未命中<b>或 Redis 不可用</b>时返回 null
+     */
+    private Boolean readCache(String cacheKey) {
+        if (stringRedisTemplate == null) {
+            return null;
+        }
+        try {
+            String cached = stringRedisTemplate.opsForValue().get(cacheKey);
+            if (DISABLED_FLAG.equals(cached)) {
+                return false;
+            }
+            if (ENABLED_FLAG.equals(cached)) {
+                return true;
+            }
+            return null;
+        } catch (Exception e) {
+            // ★ 这里必须吞掉异常，绝不能让它冒出去。
+            //
+            // isEnabled 是在拦截器里调的 —— 一旦抛异常，结果就是
+            // "Redis 一挂，所有需要登录的接口全部 500"，包括登录本身之后的任何操作。
+            // 缓存是性能优化，不该成为可用性的单点。
+            //
+            // 这个问题是集成测试发现的：单元测试里 Redis 是打桩好的 mock，
+            // 永远不抛异常，根本覆盖不到这条路径。
+            log.warn("读取用户状态缓存失败，回退查库: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private boolean loadFromDatabase(Long userId, String cacheKey) {
         User user = userMapper.selectById(userId);
         // 用户不存在（已被删除）也按禁用处理 —— 一个查不到的账号不该能访问接口
         boolean enabled = user != null && user.getStatus() != null
                 && user.getStatus() == StatusConstant.ENABLED;
 
-        if (stringRedisTemplate != null) {
+        writeCache(cacheKey, enabled);
+        return enabled;
+    }
+
+    private void writeCache(String cacheKey, boolean enabled) {
+        if (stringRedisTemplate == null) {
+            return;
+        }
+        try {
             // 用 set(key, value, ttl) 一步写入，而不是先 set 再 expire：
             // 两条命令之间有窗口，进程恰好在这里挂掉就会留下一个永不过期的 key，
             // 那个用户的状态会被永久冻结在这一次的结果上
             stringRedisTemplate.opsForValue().set(
                     cacheKey, enabled ? ENABLED_FLAG : DISABLED_FLAG, CACHE_TTL);
+        } catch (Exception e) {
+            // 写不进去只是每次都回查数据库，判断结果本身不受影响
+            log.warn("写入用户状态缓存失败（不影响本次判断）: {}", e.getMessage());
         }
-        return enabled;
     }
 }

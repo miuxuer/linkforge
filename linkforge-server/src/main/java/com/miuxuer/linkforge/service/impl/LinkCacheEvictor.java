@@ -37,6 +37,13 @@ public class LinkCacheEvictor {
         if (stringRedisTemplate == null || !StringUtils.hasText(shortCode)) {
             return;
         }
-        stringRedisTemplate.delete(RedisKeyConstant.LINK_CACHE + shortCode);
+        try {
+            stringRedisTemplate.delete(RedisKeyConstant.LINK_CACHE + shortCode);
+        } catch (Exception e) {
+            // 清缓存失败不能让"停用/删除短链"这个业务操作跟着失败 ——
+            // 数据库里的状态已经改好了，缓存最迟在 TTL 到期时自然失效。
+            // 代价是这段时间内短链可能还在跳，所以必须记日志
+            log.warn("清除短链缓存失败（状态已更新，缓存会自然过期）: shortCode={}", shortCode, e);
+        }
     }
 }

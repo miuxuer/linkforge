@@ -89,6 +89,25 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!--
+          MockMvc 的测试支持。Boot 4 把它从 spring-boot-starter-test 里拆了出来，
+          单独一个 starter —— 不引的话 @AutoConfigureMockMvc 根本找不到。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+          H2 内存数据库，集成测试用。
+          有了它，@SpringBootTest 才能在不依赖本机 MySQL 的前提下把整个上下文跑起来 ——
+          换台机器 clone 下来就能跑测试，不用先装数据库。
+        -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

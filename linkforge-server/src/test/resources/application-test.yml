@@ -1,0 +1,41 @@
+# 集成测试专用的配置。@ActiveProfiles("test") 会用它替换掉 application-dev.yml。
+#
+# 和开发环境的两处关键区别：
+#   1. 数据库用 H2 内存库，不依赖本机 MySQL —— 换个机器也能跑
+#   2. JWT 密钥直接写在这里，不需要设环境变量
+#      （这个密钥只在测试里用，不会签发任何真实 token）
+
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    # MODE=MySQL 让 H2 认识 MySQL 的语法；DB_CLOSE_DELAY=-1 让内存库在最后一个
+    # 连接关闭后仍然存在，否则连接池回收连接时库就被清空了
+    url: jdbc:h2:mem:linkforge;MODE=MySQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+  sql:
+    # 每次启动都建表。H2 内存库本来就是空的，不需要 IF NOT EXISTS 之外的处理
+    init:
+      mode: always
+      schema-locations: classpath:schema-h2.sql
+
+linkforge:
+  jwt:
+    # 测试用密钥。长度必须 ≥ 32 字节，否则 jjwt 会拒绝
+    secret-key: linkforge-integration-test-secret-key-0123456789
+    ttl: 3600000
+    token-name: token
+  domain: http://localhost:8080
+  bloom:
+    # 测试里数据量很小，容量调小一点建得快
+    expected-insertions: 1000
+    fpp: 0.01
+  ratelimit:
+    window-seconds: 60
+    # 阈值调高，避免集成测试里几次请求就被限流
+    max-requests: 10000
+
+logging:
+  level:
+    root: warn
+    com.miuxuer.linkforge: info
