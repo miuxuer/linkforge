@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.miuxuer</groupId>
+        <artifactId>linkforge</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>linkforge-common</artifactId>
+    <name>linkforge-common</name>
+    <description>基础设施：Result / 异常 / 常量 / ThreadLocal / 配置属性 / 工具类，零业务</description>
+
+    <!--
+      本模块不依赖 pojo 和 server，处在依赖链最底层。
+      具体依赖（jjwt、zxing、oss）等用到它们的工具类落地时再加，
+      避免现在挂一堆编译期用不上的包。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+</project>

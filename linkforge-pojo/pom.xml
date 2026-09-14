@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.miuxuer</groupId>
+        <artifactId>linkforge</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>linkforge-pojo</artifactId>
+    <name>linkforge-pojo</name>
+    <description>纯数据载体：entity / dto / vo，不含任何业务逻辑</description>
+
+    <dependencies>
+        <!--
+          跨模块依赖必须显式写 version（父 dependencyManagement 里不登记内部模块）。
+          ${project.version} 取的是本模块自己的版本，和父工程一致，改版本时不用两处改。
+        -->
+        <dependency>
+            <groupId>com.miuxuer</groupId>
+            <artifactId>linkforge-common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+    </dependencies>
+
+</project>

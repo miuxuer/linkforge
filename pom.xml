@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      继承 spring-boot-starter-parent 而不是自己 import spring-boot-dependencies：
+      前者除了版本管理，还顺带把 maven-compiler-plugin 的 <parameters>true</parameters>、
+      jar 打包默认值等配置一起带下来，省掉一堆样板。
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.16</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.miuxuer</groupId>
+    <artifactId>linkforge</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+    <name>linkforge</name>
+    <description>LinkForge 短链管理平台</description>
+
+    <!-- 父工程只做三件事：聚合模块、声明版本、统一编译配置，自己不打业务代码 -->
+    <modules>
+        <module>linkforge-common</module>
+        <module>linkforge-pojo</module>
+        <module>linkforge-server</module>
+    </modules>
+
+    <properties>
+        <java.version>17</java.version>
+        <!-- 下面这些版本父工程统一管；子模块引三方依赖时不写 version -->
+        <mybatis-plus.version>3.5.9</mybatis-plus.version>
+        <jjwt.version>0.12.6</jjwt.version>
+        <alibabacloud-oss.version>0.5.1</alibabacloud-oss.version>
+        <zxing.version>3.5.3</zxing.version>
+        <guava.version>33.4.0-jre</guava.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!--
+              这里只登记「Spring Boot 父 pom 没管」的依赖。
+              starter-web / lombok / mysql-connector-j 这些 Boot 已经管了版本，
+              再写一遍反而容易和 Boot 版本对不上。
+            -->
+
+            <!-- MyBatis-Plus：Boot 3 必须用 -spring-boot3 后缀的 starter -->
+            <dependency>
+                <groupId>com.baomidou</groupId>
+                <artifactId>mybatis-plus-spring-boot3-starter</artifactId>
+                <version>${mybatis-plus.version}</version>
+            </dependency>
+
+            <!-- JJWT 三件套：api 编译期用、impl 运行期用、jackson 负责 JSON 序列化 -->
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+
+            <!-- 阿里云 OSS V2 SDK -->
+            <dependency>
+                <groupId>com.aliyun.oss</groupId>
+                <artifactId>alibabacloud-oss-v2</artifactId>
+                <version>${alibabacloud-oss.version}</version>
+            </dependency>
+
+            <!-- ZXing：core 负责编码，javase 提供 BufferedImage 支持 -->
+            <dependency>
+                <groupId>com.google.zxing</groupId>
+                <artifactId>core</artifactId>
+                <version>${zxing.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.google.zxing</groupId>
+                <artifactId>javase</artifactId>
+                <version>${zxing.version}</version>
+            </dependency>
+
+            <!-- Guava：只为了用它的 BloomFilter 做缓存穿透防护 -->
+            <dependency>
+                <groupId>com.google.guava</groupId>
+                <artifactId>guava</artifactId>
+                <version>${guava.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!--
+              显式声明 lombok 的注解处理器路径，而不是靠 javac 从 classpath 自动发现。
+              显式声明的好处：以后再加 MapStruct 之类的处理器时不会互相干扰。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>
