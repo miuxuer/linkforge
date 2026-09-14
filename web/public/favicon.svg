@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- 一个简化的"链环"图形。用 SVG 而不是 png/ico：
+       纯文本、能进版本控制、任何尺寸都清晰，而且不用额外造二进制文件 -->
+  <rect width="64" height="64" rx="14" fill="#409eff"/>
+  <g fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round">
+    <path d="M27 37 L37 27"/>
+    <path d="M22 30 a10 10 0 0 1 0-14 l4-4 a10 10 0 0 1 14 14"/>
+    <path d="M42 34 a10 10 0 0 1 0 14 l-4 4 a10 10 0 0 1-14-14"/>
+  </g>
+</svg>
