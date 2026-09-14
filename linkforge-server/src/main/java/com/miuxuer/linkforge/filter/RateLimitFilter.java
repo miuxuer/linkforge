@@ -3,6 +3,7 @@ package com.miuxuer.linkforge.filter;
 import com.miuxuer.linkforge.constant.RedisKeyConstant;
 import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.result.ResultCode;
+import com.miuxuer.linkforge.utils.WebUtils;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -100,7 +101,9 @@ public class RateLimitFilter extends OncePerRequestFilter {
             return;
         }
 
-        String clientIp = getClientIp(request);
+        // 取真实 IP 的逻辑和访问明细共用，抽在 WebUtils 里。
+        // 两处各写一遍的话，哪天发现了 X-Forwarded-For 的解析 bug，很容易只改一处
+        String clientIp = WebUtils.getClientIp(request);
         String key = RedisKeyConstant.RATE_LIMIT + clientIp;
 
         Long allowed = stringRedisTemplate.execute(
@@ -148,28 +151,4 @@ public class RateLimitFilter extends OncePerRequestFilter {
                 && path.length() > 1;
     }
 
-    /**
-     * 取客户端真实 IP。
-     *
-     * <p>直接拿 {@code getRemoteAddr()} 在有 Nginx 反代时拿到的是 Nginx 的 IP ——
-     * 那样所有用户共用一个限流额度，一个人刷就把全站刷限流了。
-     * 所以优先读代理加的 X-Forwarded-For。
-     *
-     * <p>取第一个 IP：X-Forwarded-For 是逗号分隔的链路（客户端, 代理1, 代理2...），
-     * 最左边才是原始客户端。注意这个头是客户端可伪造的，生产环境应该只信任
-     * 自己那一层代理追加的值。
-     */
-    private String getClientIp(HttpServletRequest request) {
-        String ip = request.getHeader("X-Forwarded-For");
-        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getHeader("X-Real-IP");
-        }
-        if (ip == null || ip.isEmpty() || "unknown".equalsIgnoreCase(ip)) {
-            ip = request.getRemoteAddr();
-        }
-        if (ip != null && ip.contains(",")) {
-            ip = ip.split(",")[0].trim();
-        }
-        return ip;
-    }
 }

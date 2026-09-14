@@ -3,6 +3,8 @@ package com.miuxuer.linkforge.controller;
 import com.miuxuer.linkforge.event.VisitEvent;
 import com.miuxuer.linkforge.exception.LinkNotFoundException;
 import com.miuxuer.linkforge.service.LinkService;
+import com.miuxuer.linkforge.utils.WebUtils;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +39,9 @@ public class RedirectController {
      * 这是短链服务的取舍：用一次网络往返换取可观测性和可控性。
      */
     @GetMapping("/{shortCode}")
-    public void redirect(@PathVariable String shortCode, HttpServletResponse response) throws IOException {
+    public void redirect(@PathVariable String shortCode,
+                         HttpServletRequest request,
+                         HttpServletResponse response) throws IOException {
         String originalUrl = linkService.getOriginalUrl(shortCode);
 
         // 查不到、或者库里的地址不是 http(s)（有人绕过创建接口直接写库塞了
@@ -46,9 +50,17 @@ public class RedirectController {
             throw new LinkNotFoundException(shortCode);
         }
 
-        // 发事件而不是直接调计数方法：计数要访问 Redis，同步做会给每个跳转
-        // 多加一次网络往返。事件由 @Async 监听器处理，本方法发完就走。
-        eventPublisher.publishEvent(new VisitEvent(shortCode));
+        // 发事件而不是直接调 Service：计数要写 Redis、明细要写 MySQL，
+        // 同步做会给每个跳转多加两次外部存储访问。事件由 @Async 监听器处理，
+        // 本方法发完就返回 302，一行库都不写。
+        //
+        // IP / UA / Referer 在这里取好带进事件：Service 层不该碰 HttpServletRequest，
+        // 这是本项目的分层铁律，所以由 Controller 负责把 Web 层的信息传下去。
+        eventPublisher.publishEvent(new VisitEvent(
+                shortCode,
+                WebUtils.getClientIp(request),
+                WebUtils.getUserAgent(request),
+                WebUtils.getReferer(request)));
 
         response.sendRedirect(originalUrl);
     }
