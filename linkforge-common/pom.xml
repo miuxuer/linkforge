@@ -62,6 +62,21 @@
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
 
+        <!--
+          ZXing 二维码。
+          core 负责编码/解码（纯算法，输出位矩阵），javase 提供
+          MatrixToImageWriter 这类和 java.awt 打交道的桥接工具。
+          只用 core 的话得自己把位矩阵画成图片，多写一堆代码。
+        -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
