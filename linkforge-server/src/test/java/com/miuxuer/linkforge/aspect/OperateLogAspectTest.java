@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.mock.web.MockMultipartFile;
 import org.junit.jupiter.api.extension.ExtendWith;
 import tools.jackson.databind.ObjectMapper;
 
@@ -29,6 +30,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -247,5 +251,68 @@ class OperateLogAspectTest {
         assertNotNull(saved.getMethodParams());
         // 退化成 toString 也远比"因为序列化失败整条日志丢掉"要好
         assertTrue(saved.getReturnValue().contains("ok"), saved.getReturnValue());
+    }
+
+    // ==================== 文件参数 ====================
+
+    @Test
+    @DisplayName("★ 上传接口的入参记成文件信息，而不是对象地址")
+    void multipartFileArg_shouldBeRecordedAsFileInfo() throws Throwable {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "avatar.png", "image/png", new byte[2048]);
+
+        aspect.recordOperateLog(joinPointReturning("ok", file));
+
+        String params = captureSaved().getMethodParams();
+        // 关键：记的是"文件名 + 大小"这种真正有用的信息
+        assertTrue(params.contains("avatar.png"), params);
+        assertTrue(params.contains("2048"), params);
+        // 而不是 StandardMultipartFile@1b6d3586 这种记了等于没记的东西
+        assertFalse(params.contains("StandardMultipartFile"), params);
+        assertFalse(params.contains("@"), params);
+    }
+
+    @Test
+    @DisplayName("★ 证明问题真实存在：原样的文件对象确实序列化不了，处理之后可以")
+    void rawMultipartFileCannotBeSerializedButSanitizedCan() throws Throwable {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "a.png", "image/png", new byte[10]);
+
+        // 修复前的行为：Jackson 顺着 MultipartFile → resource → URI 一路取下去，
+        // 而那个 URI 根本不存在，抛 FileNotFoundException。
+        // 用真实的 ObjectMapper（不是 mock）才验证得出来
+        assertThatThrownBy(() -> new ObjectMapper()
+                .writeValueAsString(new Object[]{file}))
+                .isInstanceOf(Exception.class);
+
+        // 经过切面的 replaceUnserializable 之后，同样的参数可以正常序列化 ——
+        // 而且记下来的是"文件名 + 大小"，不是对象地址
+        aspect.recordOperateLog(joinPointReturning("ok", file));
+        assertThat(captureSaved().getMethodParams()).contains("a.png");
+    }
+
+    @Test
+    @DisplayName("文件和其他参数混在一起 → 只替换文件，其他参数照常序列化")
+    void mixedArgs_shouldOnlyReplaceFile() throws Throwable {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", "b.png", "image/png", new byte[100]);
+
+        aspect.recordOperateLog(joinPointReturning("ok", "普通参数", file));
+
+        String params = captureSaved().getMethodParams();
+        assertTrue(params.contains("普通参数"), params);
+        assertTrue(params.contains("b.png"), params);
+        assertTrue(params.contains("100"), params);
+    }
+
+    @Test
+    @DisplayName("文件名为空（比如某些客户端不传）→ 不抛 NPE")
+    void multipartFileWithoutName_shouldNotThrow() throws Throwable {
+        MockMultipartFile file = new MockMultipartFile(
+                "file", null, "image/png", new byte[10]);
+
+        aspect.recordOperateLog(joinPointReturning("ok", file));
+
+        assertNotNull(captureSaved().getMethodParams());
     }
 }

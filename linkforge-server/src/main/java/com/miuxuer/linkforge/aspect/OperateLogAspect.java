@@ -11,6 +11,7 @@ import org.aspectj.lang.annotation.Around;
 import org.aspectj.lang.annotation.Aspect;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.stereotype.Component;
+import org.springframework.web.multipart.MultipartFile;
 import tools.jackson.databind.ObjectMapper;
 
 import java.time.LocalDateTime;
@@ -128,28 +129,60 @@ public class OperateLogAspect {
     /**
      * 转 JSON 并截断。
      *
-     * <p>序列化可能失败：入参里如果有 {@code HttpServletRequest}、{@code MultipartFile}
-     * 这类对象，Jackson 处理不了会抛异常。这种情况退化成 {@code toString}，
-     * 而不是让日志记录失败 —— 参考项目直接把 {@code Arrays.toString} 的结果写库，
-     * 复杂对象会变成 {@code [Ljava.lang.Object;@1b6d3586} 这种完全没用的东西。
-     *
-     * <p>另外不能无脑用 {@code String.valueOf(array)}：数组的 toString 继承自 Object，
-     * 打出来就是上面那种地址串。判断成数组要走 {@code Arrays.deepToString}。
+     * <p>序列化之前先过一遍 {@link #replaceUnserializable}，把文件之类的
+     * "序列化不了也没必要序列化"的参数换掉。catch 分支留着只是兜底 ——
+     * 再出现没预料到的类型时不至于让日志丢掉，但不该是常规路径。
      */
     private String toJson(Object value) {
         if (value == null) {
             return null;
         }
+
+        Object serializable = replaceUnserializable(value);
         try {
-            String json = objectMapper.writeValueAsString(value);
-            return truncate(mask(json), OperateLogConstant.MAX_TEXT_LENGTH);
+            return truncate(mask(objectMapper.writeValueAsString(serializable)),
+                    OperateLogConstant.MAX_TEXT_LENGTH);
         } catch (Exception e) {
-            log.debug("入参/返回值无法序列化为 JSON，退化为 toString", e);
-            String fallback = value.getClass().isArray()
-                    ? Arrays.deepToString((Object[]) value)
-                    : String.valueOf(value);
+            // 走到这里说明又出现了没预料到的类型。
+            // 只记一句原因，不打堆栈 —— 记日志失败是次要问题，
+            // 一整屏堆栈会把真正的业务日志淹掉，反而更难排查
+            log.debug("入参/返回值无法序列化为 JSON，退化为 toString: {}", e.getMessage());
+            String fallback = serializable.getClass().isArray()
+                    ? Arrays.deepToString((Object[]) serializable)
+                    : String.valueOf(serializable);
             return truncate(mask(fallback), OperateLogConstant.MAX_TEXT_LENGTH);
         }
+    }
+
+    /**
+     * 把"序列化不了、而且序列化了也没意义"的参数换成一句人能看懂的描述。
+     *
+     * <p><b>为什么要在序列化之前处理，而不是靠 catch 兜底</b>：
+     * {@code MultipartFile} 被 Jackson 序列化时，它会顺着
+     * {@code resource → URI} 一路取下去，而这个 URI 是不存在的，
+     * 于是抛 {@code FileNotFoundException}。靠 catch 兜底有三个问题：
+     *
+     * <ol>
+     *   <li><b>打堆栈</b>：上传接口每次调用都会打八十行堆栈。它是个<b>必然发生</b>的
+     *       已知情况，不是异常，用堆栈来记录纯粹是噪音
+     *   <li><b>兜底结果没用</b>：{@code Arrays.toString} 对文件对象打出来是
+     *       {@code [StandardMultipartFile@1b6d3586]} —— 这种"记了等于没记"的内容，
+     *       偏偏还占掉了日志表的空间
+     *   <li><b>白花性能</b>：先尝试序列化、失败、再走兜底，等于每次上传都做两次无用功
+     * </ol>
+     *
+     * <p>换成文件名和大小之后，"谁在什么时候传了多大的一张图"就是一条真正有用的审计记录。
+     */
+    private Object replaceUnserializable(Object value) {
+        if (value instanceof MultipartFile file) {
+            return "<文件: %s, %d 字节>".formatted(file.getOriginalFilename(), file.getSize());
+        }
+        // 数组要逐个元素处理：入参本身总是 Object[]，
+        // 只判断最外层的话，里面的文件对象照样会走进异常分支
+        if (value instanceof Object[] array) {
+            return Arrays.stream(array).map(this::replaceUnserializable).toArray();
+        }
+        return value;
     }
 
     /**
