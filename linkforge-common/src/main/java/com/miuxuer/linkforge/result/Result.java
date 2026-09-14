@@ -52,6 +52,16 @@ public class Result<T> {
         return build(resultCode.getCode(), message, null);
     }
 
+    /**
+     * 失败，业务码由调用方直接给出。
+     *
+     * <p>给"异常自己带着业务码"的场景用：GlobalExceptionHandler 处理
+     * {@code BusinessException} 时，码是从异常上取的，不是某个固定的 ResultCode。
+     */
+    public static <T> Result<T> error(int code, String message) {
+        return build(code, message, null);
+    }
+
     private static <T> Result<T> build(int code, String message, T data) {
         Result<T> result = new Result<>();
         result.setCode(code);
