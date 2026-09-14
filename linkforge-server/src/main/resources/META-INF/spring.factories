@@ -1,0 +1,10 @@
+# 注册自定义的启动失败分析器。
+#
+# Spring Boot 启动失败时会遍历这里列的分析器，找到能处理该异常的就把
+# 它的输出打到控制台上 —— 这是把"看不懂的堆栈"变成"看得懂的提示"的标准做法。
+#
+# 注意这个文件不是自动配置的注册处（那个是
+# META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports），
+# 两者用途不同，别搞混。
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+com.miuxuer.linkforge.config.DatabaseConnectionFailureAnalyzer
