@@ -3,6 +3,8 @@ package com.miuxuer.linkforge;
 import org.mybatis.spring.annotation.MapperScan;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * LinkForge 启动类。
@@ -15,6 +17,10 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 // MyBatis 的 Mapper 是接口，没有实现类，得靠这个注解让 MyBatis 生成代理对象注册成 Bean。
 // 手写在一个个接口上打 @Mapper 也行，但 Mapper 一多就容易漏，统一扫描更稳。
 @MapperScan("com.miuxuer.linkforge.mapper")
+// 开启定时任务：访问计数每 5 分钟从 Redis 批量回写数据库
+@EnableScheduling
+// 开启异步执行：跳转时发的访问事件在独立线程池里处理，不拖慢 302 响应
+@EnableAsync
 public class LinkForgeApplication {
 
     public static void main(String[] args) {

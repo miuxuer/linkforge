@@ -43,6 +43,7 @@ class LinkServiceImplTest {
 
     private static final String CACHE_KEY = "linkforge:link:cache:";
     private static final String LOCK_KEY = "linkforge:link:lock:";
+    private static final String VISITS_KEY = "linkforge:link:visits:";
 
     @Mock
     private LinkMapper linkMapper;
@@ -185,6 +186,26 @@ class LinkServiceImplTest {
         when(linkMapper.selectOne(any())).thenReturn(link("plain1", "https://www.degraded.com"));
 
         assertEquals("https://www.degraded.com", degraded.getOriginalUrl("plain1"));
+    }
+
+    // ==================== 访问计数 ====================
+
+    @Test
+    @DisplayName("访问计数 → 只做 Redis INCR，一次数据库都不碰")
+    void incrementVisitCount_shouldOnlyTouchRedis() {
+        linkService.incrementVisitCount("abc123");
+
+        // 走 Redis 而不是直接 UPDATE，是这套计数方案的全部意义所在
+        verify(valueOperations).increment(VISITS_KEY + "abc123");
+        verify(linkMapper, never()).update(any(), any());
+    }
+
+    @Test
+    @DisplayName("Redis 不可用 → 计数直接跳过，不抛异常拖垮跳转")
+    void incrementVisitCount_withoutRedis_shouldNotThrow() {
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager);
+
+        degraded.incrementVisitCount("abc123");
     }
 
     // ==================== 创建短链 ====================

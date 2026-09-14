@@ -28,4 +28,14 @@ public interface LinkService {
      * @return 原始长链接；不存在返回 null
      */
     String getOriginalUrl(String shortCode);
+
+    /**
+     * 访问计数 +1。
+     *
+     * <p>只写 Redis，不碰数据库 —— 由 {@code VisitCountSyncTask} 定时批量回写。
+     * 调用方是异步的事件监听器，所以本方法不在跳转的响应链路上。
+     *
+     * @param shortCode 短码
+     */
+    void incrementVisitCount(String shortCode);
 }

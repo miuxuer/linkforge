@@ -1,5 +1,6 @@
 package com.miuxuer.linkforge.filter;
 
+import com.miuxuer.linkforge.constant.RedisKeyConstant;
 import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.result.ResultCode;
 import jakarta.servlet.FilterChain;
@@ -44,9 +45,6 @@ import java.util.List;
 @Component
 @Order(1)
 public class RateLimitFilter extends OncePerRequestFilter {
-
-    /** Redis 限流 key 前缀。 */
-    private static final String RATE_LIMIT_KEY_PREFIX = "linkforge:ratelimit:";
 
     /**
      * Lua 脚本：原子完成 "计数 +1 → 首次计数时设过期 → 判断是否超阈值"。
@@ -103,7 +101,7 @@ public class RateLimitFilter extends OncePerRequestFilter {
         }
 
         String clientIp = getClientIp(request);
-        String key = RATE_LIMIT_KEY_PREFIX + clientIp;
+        String key = RedisKeyConstant.RATE_LIMIT + clientIp;
 
         Long allowed = stringRedisTemplate.execute(
                 redisScript,

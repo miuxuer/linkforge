@@ -2,6 +2,7 @@ package com.miuxuer.linkforge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.google.common.hash.BloomFilter;
+import com.miuxuer.linkforge.constant.RedisKeyConstant;
 import com.miuxuer.linkforge.entity.Link;
 import com.miuxuer.linkforge.mapper.LinkMapper;
 import com.miuxuer.linkforge.service.IdSegmentManager;
@@ -37,12 +38,6 @@ import java.util.concurrent.ThreadLocalRandom;
 @Slf4j
 @Service
 public class LinkServiceImpl implements LinkService {
-
-    /** 短码 -> 原始链接的缓存 key 前缀。 */
-    private static final String CACHE_KEY_PREFIX = "linkforge:link:cache:";
-
-    /** 重建缓存用的互斥锁 key 前缀。 */
-    private static final String LOCK_KEY_PREFIX = "linkforge:link:lock:";
 
     /** 缓存基础过期时间（分钟）。 */
     private static final int CACHE_TTL_MINUTES = 30;
@@ -114,7 +109,7 @@ public class LinkServiceImpl implements LinkService {
 
         // 第二层：Redis 缓存
         if (stringRedisTemplate != null) {
-            String cacheKey = CACHE_KEY_PREFIX + shortCode;
+            String cacheKey = RedisKeyConstant.LINK_CACHE + shortCode;
             String cached = stringRedisTemplate.opsForValue().get(cacheKey);
             if (cached != null) {
                 return cached;
@@ -122,7 +117,7 @@ public class LinkServiceImpl implements LinkService {
 
             // 第三层：互斥锁防击穿。缓存刚失效时可能有大量请求同时到达，
             // 只让抢到锁的那一个去查库，其它线程等它把缓存回填好再读。
-            String lockKey = LOCK_KEY_PREFIX + shortCode;
+            String lockKey = RedisKeyConstant.LINK_LOCK + shortCode;
             for (int i = 0; i < MAX_RETRIES; i++) {
                 // SETNX + TTL 一步完成：既保证只有一个线程拿到锁，又保证锁不会永久残留
                 Boolean locked = stringRedisTemplate.opsForValue()
@@ -189,11 +184,22 @@ public class LinkServiceImpl implements LinkService {
         }
         if (stringRedisTemplate != null) {
             stringRedisTemplate.opsForValue().set(
-                    CACHE_KEY_PREFIX + shortCode,
+                    RedisKeyConstant.LINK_CACHE + shortCode,
                     link.getOriginalUrl(),
                     randomCacheTtl());
         }
         return link.getOriginalUrl();
+    }
+
+    @Override
+    public void incrementVisitCount(String shortCode) {
+        if (stringRedisTemplate == null) {
+            return;
+        }
+        // INCR 是原子的：多个线程同时打同一个短链不会丢计数。
+        // 这里不设过期时间 —— 计数器要一直累加到定时任务把它取走为止，
+        // 中途过期就等于丢访问量。定时任务取走后会 delete 掉这个 key。
+        stringRedisTemplate.opsForValue().increment(RedisKeyConstant.LINK_VISITS + shortCode);
     }
 
     private Link selectByShortCode(String shortCode) {
