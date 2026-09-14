@@ -1,6 +1,7 @@
 package com.miuxuer.linkforge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.common.hash.BloomFilter;
 import com.miuxuer.linkforge.constant.MessageConstant;
@@ -9,8 +10,10 @@ import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
 import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
+import com.miuxuer.linkforge.dto.LinkUpdateDTO;
 import com.miuxuer.linkforge.entity.Link;
 import com.miuxuer.linkforge.exception.BusinessException;
+import com.miuxuer.linkforge.exception.LinkNotFoundException;
 import com.miuxuer.linkforge.mapper.LinkMapper;
 import com.miuxuer.linkforge.properties.LinkProperties;
 import com.miuxuer.linkforge.result.ResultCode;
@@ -161,6 +164,91 @@ public class LinkServiceImpl implements LinkService {
                 .toList();
 
         return PageResult.of(result.getTotal(), result.getCurrent(), result.getSize(), records);
+    }
+
+    @Override
+    public void updateLink(Long id, LinkUpdateDTO dto) {
+        Long userId = requireCurrentUserId();
+        Link existing = requireOwnedLink(id, userId);
+
+        // 用 wrapper 显式 .set 而不是 updateById：updateById 会把实体里为 null 的字段
+        // 当成"不修改"，于是"取消过期时间"这个操作就表达不出来了。
+        // 这里每个字段都显式 set，null 就是"设成 null"。
+        LambdaUpdateWrapper<Link> wrapper = new LambdaUpdateWrapper<Link>()
+                .eq(Link::getId, id)
+                // ★ 写操作同样要带 owner 条件。只靠上面那次查出来判断是不够的 ——
+                // 查询和更新之间隔了一段时间，中间可能发生变化（TOCTOU）。
+                // 把条件写进 UPDATE 的 WHERE 里，隔离才是原子的。
+                .eq(Link::getUserId, userId)
+                .set(Link::getTitle, dto.getTitle())
+                .set(Link::getRemark, dto.getRemark())
+                .set(Link::getStatus, dto.getStatus())
+                .set(Link::getExpireTime, dto.getExpireTime());
+
+        // 空实体只用来承接切面填的 update_time / update_user，自己不提供 SET 字段
+        int rows = linkMapper.updateWithFill(new Link(), wrapper);
+        if (rows == 0) {
+            // 查出来时还在、更新时已经不是自己的了（或者被并发删掉）
+            throw new LinkNotFoundException(id);
+        }
+
+        log.info("短链已更新: id={}, userId={}, 状态={}", id, userId, dto.getStatus());
+
+        // 改了状态或过期时间之后，缓存里那条"能跳转"的旧结果就过期了。
+        // 不删的话，被停用的短链在被缓存命中的情况下还能继续跳 ——
+        // 用户以为停用生效了，实际没有。
+        evictCache(existing.getShortCode());
+    }
+
+    @Override
+    public void deleteLink(Long id) {
+        Long userId = requireCurrentUserId();
+        Link existing = requireOwnedLink(id, userId);
+
+        // 逻辑删除：@TableLogic 会把 delete 改写成 UPDATE ... SET deleted = 1。
+        // 条件里同样带上 user_id。
+        int rows = linkMapper.delete(new LambdaQueryWrapper<Link>()
+                .eq(Link::getId, id)
+                .eq(Link::getUserId, userId));
+        if (rows == 0) {
+            throw new LinkNotFoundException(id);
+        }
+
+        log.info("短链已删除: id={}, userId={}", id, userId);
+        evictCache(existing.getShortCode());
+    }
+
+    /**
+     * 校验短链存在且属于当前用户，返回库里的记录。
+     *
+     * <p>"不存在"和"不是你的"分开报错：前者 404，后者 403。
+     * 都报 404 的话用户会以为是自己删过，反复刷新；但也不能报得太细 ——
+     * 见 {@code MessageConstant.LINK_NOT_OWNED} 里对这个取舍的说明。
+     */
+    private Link requireOwnedLink(Long id, Long userId) {
+        Link existing = linkMapper.selectById(id);
+        if (existing == null) {
+            throw new LinkNotFoundException(id);
+        }
+        if (!userId.equals(existing.getUserId())) {
+            log.warn("越权操作短链: linkId={}, 归属={}, 当前={}", id, existing.getUserId(), userId);
+            throw new BusinessException(ResultCode.FORBIDDEN, MessageConstant.LINK_NOT_OWNED);
+        }
+        return existing;
+    }
+
+    /**
+     * 清掉某个短码的跳转缓存。
+     *
+     * <p>只删缓存，不动布隆过滤器 —— 布隆是"可能存在"的数据结构，删不掉元素。
+     * 短码留在布隆里完全没问题：它只是让请求继续往下走，最终由缓存/数据库判断有效性，
+     * 不会导致已停用的短链被放行。
+     */
+    private void evictCache(String shortCode) {
+        if (stringRedisTemplate == null || shortCode == null) {
+            return;
+        }
+        stringRedisTemplate.delete(RedisKeyConstant.LINK_CACHE + shortCode);
     }
 
     /**

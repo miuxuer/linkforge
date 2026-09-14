@@ -1,5 +1,6 @@
 package com.miuxuer.linkforge.mapper;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.miuxuer.linkforge.annotation.AutoFill;
 import com.miuxuer.linkforge.enumeration.OperationType;
@@ -45,5 +46,29 @@ public interface AutoFillMapper<T> extends BaseMapper<T> {
     @AutoFill(OperationType.UPDATE)
     default int updateByIdWithFill(T entity) {
         return updateById(entity);
+    }
+
+    /**
+     * 按条件更新，同时自动填充公共字段。
+     *
+     * <p><b>为什么还需要这个方法：{@code updateById} 没法把字段置空。</b>
+     * MyBatis-Plus 的默认策略是"实体里为 null 的字段不参与 SET"，
+     * 于是"把短链的过期时间清掉"这个操作根本表达不出来 ——
+     * 用户会发现自己设了过期时间之后就再也取消不掉了。
+     *
+     * <p>走 wrapper 的 {@code .set(字段, null)} 是显式声明"我要把它设成 null"，
+     * 不受 null 策略影响，所以能表达置空。同时 entity 参数仍然由切面填
+     * update_time / update_user，两个目的都达到。
+     *
+     * <p>调用方通常传一个空实体（{@code new Link()}）作为填充目标 ——
+     * 它自己不提供任何 SET 字段，只负责承接切面填的公共字段。
+     *
+     * @param entity        公共字段的填充目标，可为空实体，也可为 null
+     * @param updateWrapper 更新条件与显式 SET，<b>条件里必须带上 owner 字段</b>
+     * @return 影响行数
+     */
+    @AutoFill(OperationType.UPDATE)
+    default int updateWithFill(T entity, Wrapper<T> updateWrapper) {
+        return update(entity, updateWrapper);
     }
 }

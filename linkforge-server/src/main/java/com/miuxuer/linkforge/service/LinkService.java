@@ -2,6 +2,7 @@ package com.miuxuer.linkforge.service;
 
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
 import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
+import com.miuxuer.linkforge.dto.LinkUpdateDTO;
 import com.miuxuer.linkforge.vo.LinkVO;
 import com.miuxuer.linkforge.vo.PageResult;
 
@@ -36,6 +37,29 @@ public interface LinkService {
      * @return 当前页的短链
      */
     PageResult<LinkVO> pageMyLinks(LinkPageQueryDTO dto);
+
+    /**
+     * 修改自己的短链（标题、备注、状态、过期时间）。
+     *
+     * <p>整条覆盖语义：没传的字段会被写成 null，见 {@link LinkUpdateDTO}。
+     *
+     * @throws com.miuxuer.linkforge.exception.LinkNotFoundException 短链不存在
+     * @throws com.miuxuer.linkforge.exception.BusinessException     短链不属于当前用户
+     */
+    void updateLink(Long id, LinkUpdateDTO dto);
+
+    /**
+     * 删除自己的短链（逻辑删除）。
+     *
+     * <p>逻辑删除而不是物理删除：短链一旦发出去就可能被人收藏、被人引用，
+     * 记录删掉之后 {@code t_visit_log} 里的访问明细就成了孤儿数据，
+     * 数据看板也没法回溯。保留 {@code deleted=1} 的记录既能"删掉"，
+     * 又不破坏历史数据的完整性。
+     *
+     * @throws com.miuxuer.linkforge.exception.LinkNotFoundException 短链不存在
+     * @throws com.miuxuer.linkforge.exception.BusinessException     短链不属于当前用户
+     */
+    void deleteLink(Long id);
 
     /**
      * 按短码取原始长链接，供 302 跳转用。

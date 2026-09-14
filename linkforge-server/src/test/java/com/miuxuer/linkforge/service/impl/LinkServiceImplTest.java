@@ -3,15 +3,19 @@ package com.miuxuer.linkforge.service.impl;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.google.common.hash.BloomFilter;
+import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
 import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
-import com.miuxuer.linkforge.exception.BusinessException;
+import com.miuxuer.linkforge.dto.LinkUpdateDTO;
 import com.miuxuer.linkforge.entity.Link;
+import com.miuxuer.linkforge.exception.BusinessException;
+import com.miuxuer.linkforge.exception.LinkNotFoundException;
 import com.miuxuer.linkforge.mapper.LinkMapper;
 import com.miuxuer.linkforge.properties.LinkProperties;
 import com.miuxuer.linkforge.result.ResultCode;
@@ -447,5 +451,119 @@ class LinkServiceImplTest {
 
         assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
         verify(linkMapper, never()).selectPage(any(), any());
+    }
+
+    // ==================== 修改 / 删除 ====================
+
+    /** 造一条属于 userId 的已存在短链。 */
+    private static Link ownedLink(Long id, Long userId, String shortCode) {
+        Link link = new Link();
+        link.setId(id);
+        link.setUserId(userId);
+        link.setShortCode(shortCode);
+        link.setStatus(StatusConstant.ENABLED);
+        return link;
+    }
+
+    private static LinkUpdateDTO updateDto() {
+        LinkUpdateDTO dto = new LinkUpdateDTO();
+        dto.setTitle("新标题");
+        dto.setStatus(StatusConstant.DISABLED);
+        // expireTime 故意留 null —— 这正是"取消过期时间"的表达方式
+        return dto;
+    }
+
+    @SuppressWarnings("unchecked")
+    private LambdaUpdateWrapper<Link> captureUpdateWrapper() {
+        ArgumentCaptor<Wrapper<Link>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(linkMapper).updateWithFill(any(Link.class), captor.capture());
+        return (LambdaUpdateWrapper<Link>) captor.getValue();
+    }
+
+    @Test
+    @DisplayName("修改短链 → UPDATE 的 WHERE 里必须同时有 id 和 user_id")
+    void updateLink_shouldIncludeOwnerInWhereClause() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 1001L, "abc"));
+        when(linkMapper.updateWithFill(any(Link.class), any())).thenReturn(1);
+
+        linkService.updateLink(1L, updateDto());
+
+        String sql = captureUpdateWrapper().getSqlSegment();
+        // 只用 selectById 查一次来判断归属是不够的：查询和更新之间隔了时间，
+        // 中间数据可能变（TOCTOU）。条件写进 UPDATE 的 WHERE 才是原子的。
+        assertTrue(sql.contains("user_id"), "UPDATE 少了 user_id 条件，能改到别人的短链: " + sql);
+        assertTrue(sql.contains("id"), sql);
+    }
+
+    @Test
+    @DisplayName("修改短链 → 清掉跳转缓存，否则停用后缓存命中还能继续跳")
+    void updateLink_shouldEvictCache() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 1001L, "abc"));
+        when(linkMapper.updateWithFill(any(Link.class), any())).thenReturn(1);
+
+        linkService.updateLink(1L, updateDto());
+
+        // 用户把短链停用了，但缓存里还存着"能跳"的旧结果 ——
+        // 不清掉的话，停用动作要等缓存自然过期才生效
+        verify(stringRedisTemplate).delete(CACHE_KEY + "abc");
+    }
+
+    @Test
+    @DisplayName("修改别人的短链 → 403，且一个字都不写")
+    void updateLink_notOwned_shouldThrowForbidden() {
+        CurrentHolder.setCurrentId(1001L);
+        // 这条短链属于 2002
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 2002L, "abc"));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> linkService.updateLink(1L, updateDto()));
+
+        assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+        assertEquals(MessageConstant.LINK_NOT_OWNED, e.getMessage());
+        verify(linkMapper, never()).updateWithFill(any(Link.class), any());
+    }
+
+    @Test
+    @DisplayName("修改不存在的短链 → 404")
+    void updateLink_notFound_shouldThrowNotFound() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(999L)).thenReturn(null);
+
+        LinkNotFoundException e = assertThrows(LinkNotFoundException.class,
+                () -> linkService.updateLink(999L, updateDto()));
+
+        assertEquals(ResultCode.NOT_FOUND.getHttpStatus(), e.getHttpStatus());
+    }
+
+    @Test
+    @DisplayName("删除短链 → 走逻辑删除，且条件带 user_id")
+    void deleteLink_shouldLogicallyDelete() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 1001L, "abc"));
+        when(linkMapper.delete(any())).thenReturn(1);
+
+        linkService.deleteLink(1L);
+
+        ArgumentCaptor<Wrapper<Link>> captor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(linkMapper).delete(captor.capture());
+        String sql = captor.getValue().getSqlSegment();
+        assertTrue(sql.contains("user_id"), "DELETE 少了 user_id 条件，能删掉别人的短链: " + sql);
+        // 缓存也要清，否则已删除的短链还能被跳转
+        verify(stringRedisTemplate).delete(CACHE_KEY + "abc");
+    }
+
+    @Test
+    @DisplayName("删除别人的短链 → 403，且不执行删除")
+    void deleteLink_notOwned_shouldThrowForbidden() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 2002L, "abc"));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> linkService.deleteLink(1L));
+
+        assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+        verify(linkMapper, never()).delete(any());
     }
 }

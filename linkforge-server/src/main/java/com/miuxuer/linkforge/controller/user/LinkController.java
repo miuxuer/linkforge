@@ -3,14 +3,18 @@ package com.miuxuer.linkforge.controller.user;
 import com.miuxuer.linkforge.annotation.OperateLog;
 import com.miuxuer.linkforge.dto.LinkCreateDTO;
 import com.miuxuer.linkforge.dto.LinkPageQueryDTO;
+import com.miuxuer.linkforge.dto.LinkUpdateDTO;
 import com.miuxuer.linkforge.result.Result;
 import com.miuxuer.linkforge.service.LinkService;
 import com.miuxuer.linkforge.vo.LinkVO;
 import com.miuxuer.linkforge.vo.PageResult;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -46,5 +50,31 @@ public class LinkController {
     @GetMapping("/page")
     public Result<PageResult<LinkVO>> page(@Valid LinkPageQueryDTO dto) {
         return Result.success(linkService.pageMyLinks(dto));
+    }
+
+    /**
+     * 修改短链（标题、备注、启停、过期时间）。
+     *
+     * <p>路径里的 {@code id} 是短链主键，Service 会校验它属于当前登录用户 ——
+     * 换成别人的 id 只会得到 403 / 404，改不动任何东西。
+     */
+    @PutMapping("/{id}")
+    @OperateLog
+    public Result<Void> update(@PathVariable Long id, @RequestBody @Valid LinkUpdateDTO dto) {
+        linkService.updateLink(id, dto);
+        return Result.success();
+    }
+
+    /**
+     * 删除短链（逻辑删除）。
+     *
+     * <p>用 DELETE 而不是 GET，也不是 POST /delete：HTTP 方法本身带语义，
+     * 网关、监控、灰度系统都能据此做区分（比如对 DELETE 单独告警）。
+     */
+    @DeleteMapping("/{id}")
+    @OperateLog
+    public Result<Void> delete(@PathVariable Long id) {
+        linkService.deleteLink(id);
+        return Result.success();
     }
 }
