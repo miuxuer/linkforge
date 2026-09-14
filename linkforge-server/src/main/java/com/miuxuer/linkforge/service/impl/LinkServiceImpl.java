@@ -88,7 +88,8 @@ public class LinkServiceImpl implements LinkService {
         link.setShortCode(shortCode);
         link.setOriginalUrl(originalUrl);
         link.setVisitCount(0L);
-        linkMapper.insert(link);
+        // insertWithFill 会把 create_time / update_time 自动填上（切面负责）
+        linkMapper.insertWithFill(link);
 
         // 必须同步进布隆过滤器。漏了这一步，新建的短链在缓存未命中时
         // 会被第一层直接拦掉，表现为"刚生成的短链一点就 404"。

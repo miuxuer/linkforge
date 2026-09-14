@@ -69,7 +69,9 @@ public class UserServiceImpl implements UserService {
         user.setStatus(UserConstant.STATUS_ENABLED);
 
         try {
-            userMapper.insert(user);
+            // 用 insertWithFill 而不是 insert：前者带 @AutoFill 注解，
+            // 切面会在 SQL 执行前把 create_time / update_time 等公共字段填上
+            userMapper.insertWithFill(user);
         } catch (DuplicateKeyException e) {
             // 并发注册撞上唯一索引。对用户来说这和上面那次查重是同一件事，
             // 所以抛同一个业务异常 —— 不要把数据库异常直接透给前端。

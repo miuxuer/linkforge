@@ -226,7 +226,7 @@ class LinkServiceImplTest {
         // 新短码必须进布隆，否则刚建的链会被第一层拦成 404
         verify(bloomFilter).put("1");
         // 号段模式一条 INSERT 就够，不需要回填短码
-        verify(linkMapper, times(1)).insert(any(Link.class));
-        verify(linkMapper, never()).updateById(any(Link.class));
+        verify(linkMapper, times(1)).insertWithFill(any(Link.class));
+        verify(linkMapper, never()).updateByIdWithFill(any(Link.class));
     }
 }

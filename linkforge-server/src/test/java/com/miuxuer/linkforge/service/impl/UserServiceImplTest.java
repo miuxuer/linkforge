@@ -113,7 +113,7 @@ class UserServiceImplTest {
 
     private User captureInserted() {
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
-        verify(userMapper).insert(captor.capture());
+        verify(userMapper).insertWithFill(captor.capture());
         return captor.getValue();
     }
 
@@ -160,7 +160,7 @@ class UserServiceImplTest {
         userService.register(dto("userB", null));
 
         ArgumentCaptor<User> captor = ArgumentCaptor.forClass(User.class);
-        verify(userMapper, times(2)).insert(captor.capture());
+        verify(userMapper, times(2)).insertWithFill(captor.capture());
 
         String first = captor.getAllValues().get(0).getPassword();
         String second = captor.getAllValues().get(1).getPassword();
@@ -178,7 +178,7 @@ class UserServiceImplTest {
                 () -> userService.register(dto("miuxuer", null)));
 
         assertEquals(MessageConstant.USERNAME_ALREADY_EXISTS, e.getMessage());
-        verify(userMapper, never()).insert(any(User.class));
+        verify(userMapper, never()).insertWithFill(any(User.class));
     }
 
     @Test
@@ -187,7 +187,7 @@ class UserServiceImplTest {
         // 模拟"查重时还没有、插入时已经被别人抢先"的竞态
         when(userMapper.selectCount(any())).thenReturn(0L);
         when(idSegmentManager.getNextId(any())).thenReturn(1L);
-        when(userMapper.insert(any(User.class))).thenThrow(new DuplicateKeyException("uk_username"));
+        when(userMapper.insertWithFill(any(User.class))).thenThrow(new DuplicateKeyException("uk_username"));
 
         BusinessException e = assertThrows(BusinessException.class,
                 () -> userService.register(dto("miuxuer", null)));
