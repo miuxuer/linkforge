@@ -7,11 +7,17 @@ import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.properties.JwtProperties;
 import com.miuxuer.linkforge.result.ResultCode;
+import com.miuxuer.linkforge.service.impl.UserStatusChecker;
 import com.miuxuer.linkforge.utils.JwtUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.web.method.HandlerMethod;
@@ -19,6 +25,8 @@ import org.springframework.web.method.HandlerMethod;
 import java.util.HashMap;
 import java.util.Map;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -29,11 +37,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>用 spring-test 的 Mock 请求对象手动驱动拦截器，不启动 Spring 上下文。
  */
+@ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 @DisplayName("登录拦截器")
 class JwtTokenInterceptorTest {
 
     private static final String SECRET = "linkforge-unit-test-secret-key-0123456789";
     private static final String TOKEN_HEADER = "token";
+
+    @Mock
+    private UserStatusChecker userStatusChecker;
 
     private JwtTokenInterceptor interceptor;
     private MockHttpServletRequest request;
@@ -46,7 +59,9 @@ class JwtTokenInterceptorTest {
         properties.setSecretKey(SECRET);
         properties.setTtl(3600_000L);
         properties.setTokenName(TOKEN_HEADER);
-        interceptor = new JwtTokenInterceptor(properties);
+        interceptor = new JwtTokenInterceptor(properties, userStatusChecker);
+        // 默认账号是启用的，个别用例再覆盖
+        when(userStatusChecker.isEnabled(any())).thenReturn(true);
 
         request = new MockHttpServletRequest();
         response = new MockHttpServletResponse();
@@ -153,6 +168,55 @@ class JwtTokenInterceptorTest {
         // 已登录但权限不够 —— 必须是 403 不是 401，否则前端会把用户踢去重新登录，
         // 而重新登录一万次也没用
         assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+    }
+
+    @Test
+    @DisplayName("★ 账号已被禁用 → 403，哪怕 token 本身完全合法")
+    void disabledAccount_shouldBeRejectedEvenWithValidToken() {
+        request.setRequestURI("/api/link");
+        request.addHeader(TOKEN_HEADER, validToken(1001L, UserConstant.ROLE_USER));
+        when(userStatusChecker.isEnabled(1001L)).thenReturn(false);
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> interceptor.preHandle(request, response, handlerMethod));
+
+        // JWT 是无状态的，token 一签发就收不回来。少了这道状态检查，
+        // 管理员禁用用户对"已经登录的人"完全不起作用 ——
+        // 他拿着旧 token 照样能调所有接口，直到 token 过期（本项目 7 天）
+        assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+        assertEquals(MessageConstant.ACCOUNT_DISABLED, e.getMessage());
+    }
+
+    @Test
+    @DisplayName("★ 校验失败时绝不能留下身份 —— 这是串号的根源")
+    void rejectedRequest_shouldNotLeaveIdentityInHolder() {
+        request.setRequestURI("/api/link");
+        request.addHeader(TOKEN_HEADER, validToken(1001L, UserConstant.ROLE_USER));
+        when(userStatusChecker.isEnabled(1001L)).thenReturn(false);
+
+        assertThrows(BusinessException.class,
+                () -> interceptor.preHandle(request, response, handlerMethod));
+
+        // 这一条是整个拦截器里最容易被忽略的地方：
+        // preHandle 抛异常时，Spring 不会调用它自己的 afterCompletion
+        // （HandlerExecutionChain 只回滚"已成功返回 true"的那些拦截器），
+        // 所以 ThreadLocal 得不到兜底清理。
+        // 唯一的解法是"所有校验都过了再写 ThreadLocal" —— 这里就是在锁住这个顺序。
+        assertNull(CurrentHolder.getCurrentId(),
+                "校验失败却留下了身份，Tomcat 复用线程时下一个请求会串号");
+    }
+
+    @Test
+    @DisplayName("★ 越权访问管理端被拒时，同样不能留下身份")
+    void forbiddenAdminAccess_shouldNotLeaveIdentityInHolder() {
+        request.setRequestURI("/api/admin/user/page");
+        request.addHeader(TOKEN_HEADER, validToken(1001L, UserConstant.ROLE_USER));
+
+        assertThrows(BusinessException.class,
+                () -> interceptor.preHandle(request, response, handlerMethod));
+
+        assertNull(CurrentHolder.getCurrentId(),
+                "越权被拒却留下了身份，线程复用时会串号");
     }
 
     // ==================== 通过后的状态 ====================

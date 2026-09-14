@@ -48,6 +48,9 @@ class AdminUserServiceImplTest {
     @Mock
     private UserMapper userMapper;
 
+    @Mock
+    private UserStatusChecker userStatusChecker;
+
     private AdminUserServiceImpl adminUserService;
 
     @BeforeAll
@@ -58,7 +61,7 @@ class AdminUserServiceImplTest {
 
     @BeforeEach
     void setUp() {
-        adminUserService = new AdminUserServiceImpl(userMapper);
+        adminUserService = new AdminUserServiceImpl(userMapper, userStatusChecker);
         // 当前登录的是一个管理员
         CurrentHolder.setCurrentId(ADMIN_ID);
         CurrentHolder.setCurrentRole(UserConstant.ROLE_ADMIN);
@@ -158,6 +161,10 @@ class AdminUserServiceImplTest {
         LambdaUpdateWrapper<User> wrapper = (LambdaUpdateWrapper<User>) captor.getValue();
         assertThat(wrapper.getSqlSegment()).contains("id");
         assertThat(wrapper.getSqlSet()).contains("status");
+
+        // ★ 必须清掉状态缓存。不清的话，被禁用的用户拿着旧 token 还能继续操作
+        // 最多 60 秒，管理员会以为"点了没反应"
+        verify(userStatusChecker).evict(2L);
     }
 
     @Test

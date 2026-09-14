@@ -25,6 +25,7 @@ import java.util.List;
 public class AdminUserServiceImpl implements AdminUserService {
 
     private final UserMapper userMapper;
+    private final UserStatusChecker userStatusChecker;
 
     @Override
     public PageResult<AdminUserVO> page(AdminUserPageQueryDTO dto) {
@@ -72,6 +73,11 @@ public class AdminUserServiceImpl implements AdminUserService {
         userMapper.updateWithFill(new User(), new LambdaUpdateWrapper<User>()
                 .eq(User::getId, userId)
                 .set(User::getStatus, status));
+
+        // ★ 必须清掉状态缓存，否则禁用要等缓存自然过期（最多 60 秒）才生效 ——
+        // 那 60 秒里被禁用的用户拿着旧 token 还能继续操作，
+        // 管理员会以为"点了没反应"
+        userStatusChecker.evict(userId);
 
         log.info("管理员修改用户状态: 操作人={}, 目标={}, 新状态={}", currentAdminId, userId, status);
     }

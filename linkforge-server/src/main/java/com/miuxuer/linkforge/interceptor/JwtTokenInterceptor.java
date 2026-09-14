@@ -7,6 +7,7 @@ import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.properties.JwtProperties;
 import com.miuxuer.linkforge.result.ResultCode;
+import com.miuxuer.linkforge.service.impl.UserStatusChecker;
 import com.miuxuer.linkforge.utils.JwtUtils;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
@@ -49,6 +50,7 @@ public class JwtTokenInterceptor implements HandlerInterceptor {
     private static final String ADMIN_PATH_PREFIX = "/api/admin/";
 
     private final JwtProperties jwtProperties;
+    private final UserStatusChecker userStatusChecker;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
@@ -96,9 +98,19 @@ public class JwtTokenInterceptor implements HandlerInterceptor {
                 ? UserConstant.ROLE_USER
                 : ((Number) claims.get(JwtClaimsConstant.ROLE)).intValue();
 
-        // 校验通过，把身份挂到当前线程，后面 Service / Mapper 都能直接取
-        CurrentHolder.setCurrentId(userId);
-        CurrentHolder.setCurrentRole(role);
+        // ★ 再查一次"这个账号现在还被允许访问吗"。
+        //
+        // JWT 是无状态的：token 一签发，服务端就没法让它提前失效。
+        // 少了这一步，"管理员禁用用户"对已经登录的人来说完全不起作用 ——
+        // 他拿着旧 token 照样能调所有接口，直到 token 过期（本项目是 7 天）。
+        // 这不是理论问题，是实测出来的。
+        //
+        // 状态查询有 Redis 缓存，改状态时会主动删缓存，所以禁用是立即生效的。
+        // 这里只影响 /api/**（低频的管理类接口），高并发的短码跳转不经过拦截器
+        if (!userStatusChecker.isEnabled(userId)) {
+            log.warn("已禁用的账号尝试访问: userId={}, path={}", userId, request.getRequestURI());
+            throw new BusinessException(ResultCode.FORBIDDEN, MessageConstant.ACCOUNT_DISABLED);
+        }
 
         // 管理端接口额外校验角色。普通用户拿着自己的合法 token 也能通过登录校验，
         // 所以"已登录"和"有权限"必须分开判断 —— 少了这一步就是水平越权。
@@ -106,6 +118,22 @@ public class JwtTokenInterceptor implements HandlerInterceptor {
             log.warn("越权访问管理端: userId={}, role={}, path={}", userId, role, path);
             throw new BusinessException(ResultCode.FORBIDDEN, MessageConstant.NO_PERMISSION);
         }
+
+        // ★ 所有校验都过了，最后一步才写 ThreadLocal。
+        //
+        // 顺序不能提前。Spring 的 HandlerExecutionChain 只在 preHandle
+        // "成功返回 true" 之后才记录这个拦截器的下标，而 afterCompletion 只回滚
+        // 已记录的那些 —— 也就是说，preHandle 一旦抛异常，它自己的 afterCompletion
+        // 根本不会被调用。
+        //
+        // 于是"先 set 再校验"就等于：校验失败抛异常 → 没人清理 →
+        // 身份留在了 Tomcat 的工作线程上。线程被复用去处理下一个请求时，
+        // 如果那个请求走的是白名单（login/register）或压根没进拦截器，
+        // 它就会读到上一个用户的 id —— 正是那个经典的串号坑，而且只在并发下偶发。
+        //
+        // 写成"校验全过再写"，这条路径就彻底不存在了，不依赖 afterCompletion 兜底。
+        CurrentHolder.setCurrentId(userId);
+        CurrentHolder.setCurrentRole(role);
 
         return true;
     }

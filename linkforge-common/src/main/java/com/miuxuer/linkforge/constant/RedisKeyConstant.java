@@ -30,6 +30,15 @@ public final class RedisKeyConstant {
     /** 基于 IP 的限流计数器。 */
     public static final String RATE_LIMIT = APP + "ratelimit:";
 
+    /**
+     * 用户启用状态的缓存。
+     *
+     * <p>JWT 是无状态的，签发出去就收不回来，所以"禁用用户"必须靠拦截器每次
+     * 检查一次状态才能真正生效。这个 key 就是那一次检查的缓存，
+     * 管理员改状态时会被主动删掉。
+     */
+    public static final String USER_STATUS = APP + "user:status:";
+
     /** 工具类不允许实例化。 */
     private RedisKeyConstant() {
     }
