@@ -34,6 +34,19 @@ public final class MessageConstant {
     /** 已登录但角色不够（普通用户访问管理端）。 */
     public static final String NO_PERMISSION = "没有访问权限";
 
+    // ---------- 短链 ----------
+
+    /**
+     * 短链不属于当前用户。
+     *
+     * <p>注意这里<b>不能</b>说成"短链不存在"：记录确实存在，只是不归你。
+     * 但如果真把它当"不存在"返回 404，用户会以为是自己删掉了，反复刷新；
+     * 而如果返回 403 并说清楚，攻击者据此能推断出"这个 id 存在但不属于我"——
+     * 这是个取舍。本项目选择 403 + 明确文案：短链 id 是 Base62 从号段生成的，
+     * 猜 id 的成本不低，而且用户体验更重要。
+     */
+    public static final String LINK_NOT_OWNED = "无权操作该短链";
+
     private MessageConstant() {
     }
 }

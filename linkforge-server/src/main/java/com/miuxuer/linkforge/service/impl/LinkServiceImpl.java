@@ -2,12 +2,20 @@ package com.miuxuer.linkforge.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.google.common.hash.BloomFilter;
+import com.miuxuer.linkforge.constant.MessageConstant;
 import com.miuxuer.linkforge.constant.RedisKeyConstant;
+import com.miuxuer.linkforge.constant.StatusConstant;
+import com.miuxuer.linkforge.context.CurrentHolder;
+import com.miuxuer.linkforge.dto.LinkCreateDTO;
 import com.miuxuer.linkforge.entity.Link;
+import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.mapper.LinkMapper;
+import com.miuxuer.linkforge.properties.LinkProperties;
+import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.service.LinkService;
 import com.miuxuer.linkforge.utils.Base62;
+import com.miuxuer.linkforge.vo.LinkVO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -62,6 +70,7 @@ public class LinkServiceImpl implements LinkService {
 
     private final LinkMapper linkMapper;
     private final IdSegmentManager idSegmentManager;
+    private final LinkProperties linkProperties;
 
     /** 可选依赖：Redis 不可用时自动降级为纯 DB 模式。 */
     @Autowired(required = false)
@@ -71,13 +80,18 @@ public class LinkServiceImpl implements LinkService {
     @Autowired(required = false)
     private BloomFilter<String> bloomFilter;
 
-    public LinkServiceImpl(LinkMapper linkMapper, IdSegmentManager idSegmentManager) {
+    public LinkServiceImpl(LinkMapper linkMapper,
+                           IdSegmentManager idSegmentManager,
+                           LinkProperties linkProperties) {
         this.linkMapper = linkMapper;
         this.idSegmentManager = idSegmentManager;
+        this.linkProperties = linkProperties;
     }
 
     @Override
-    public Link createLink(String originalUrl) {
+    public LinkVO createLink(LinkCreateDTO dto) {
+        Long userId = requireCurrentUserId();
+
         // 号段模式：先从内存取一个 id，Base62 转成短码，一次 INSERT 落地。
         // 一条语句就写完，没有"先插后改"的中间状态。
         long id = idSegmentManager.getNextId(IdSegmentManager.BIZ_TAG_LINK);
@@ -86,9 +100,15 @@ public class LinkServiceImpl implements LinkService {
         Link link = new Link();
         link.setId(id);
         link.setShortCode(shortCode);
-        link.setOriginalUrl(originalUrl);
+        link.setOriginalUrl(dto.getOriginalUrl());
+        link.setTitle(dto.getTitle());
+        link.setRemark(dto.getRemark());
+        // 归属用户来自登录态，不是请求体 —— 这条链路是多租户隔离的起点
+        link.setUserId(userId);
         link.setVisitCount(0L);
-        // insertWithFill 会把 create_time / update_time 自动填上（切面负责）
+        link.setStatus(StatusConstant.ENABLED);
+        link.setExpireTime(dto.getExpireTime());
+        // insertWithFill 会把 create_time / create_user 等自动填上（切面负责）
         linkMapper.insertWithFill(link);
 
         // 必须同步进布隆过滤器。漏了这一步，新建的短链在缓存未命中时
@@ -97,7 +117,23 @@ public class LinkServiceImpl implements LinkService {
             bloomFilter.put(shortCode);
         }
 
-        return link;
+        log.info("短链创建成功: id={}, shortCode={}, userId={}", id, shortCode, userId);
+        return LinkVO.from(link, linkProperties.getDomain());
+    }
+
+    /**
+     * 取当前登录用户 id，取不到直接拒绝。
+     *
+     * <p>能走到这里说明拦截器没生效（路径没注册、白名单配错），属于配置问题；
+     * 但对用户来说结果一样，按未登录处理。写成方法是为了让每个需要身份的地方
+     * 都走同一处判断，而不是各写各的 null 检查。
+     */
+    private Long requireCurrentUserId() {
+        Long userId = CurrentHolder.getCurrentId();
+        if (userId == null) {
+            throw new BusinessException(ResultCode.UNAUTHORIZED, MessageConstant.NOT_LOGGED_IN);
+        }
+        return userId;
     }
 
     @Override

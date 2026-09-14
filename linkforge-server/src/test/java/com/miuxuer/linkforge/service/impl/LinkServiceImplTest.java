@@ -1,14 +1,23 @@
 package com.miuxuer.linkforge.service.impl;
 
 import com.google.common.hash.BloomFilter;
+import com.miuxuer.linkforge.constant.StatusConstant;
+import com.miuxuer.linkforge.context.CurrentHolder;
+import com.miuxuer.linkforge.dto.LinkCreateDTO;
+import com.miuxuer.linkforge.exception.BusinessException;
 import com.miuxuer.linkforge.entity.Link;
 import com.miuxuer.linkforge.mapper.LinkMapper;
+import com.miuxuer.linkforge.properties.LinkProperties;
+import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
+import com.miuxuer.linkforge.vo.LinkVO;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
+
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
@@ -18,9 +27,11 @@ import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -60,16 +71,33 @@ class LinkServiceImplTest {
     @Mock
     private IdSegmentManager idSegmentManager;
 
-    @InjectMocks
+    private LinkProperties linkProperties;
+
     private LinkServiceImpl linkService;
 
     @BeforeEach
     void setUp() {
+        linkProperties = new LinkProperties();
+        linkProperties.setDomain("http://localhost:8080");
+
+        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
         // 这两个是 @Autowired(required = false) 的可选依赖，构造器注不进去，
         // 测试里手动塞进去
         ReflectionTestUtils.setField(linkService, "stringRedisTemplate", stringRedisTemplate);
         ReflectionTestUtils.setField(linkService, "bloomFilter", bloomFilter);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+    }
+
+    @AfterEach
+    void tearDown() {
+        // createLink 依赖 ThreadLocal 里的登录态，不清会串到下一个用例
+        CurrentHolder.remove();
+    }
+
+    private static LinkCreateDTO createDto(String originalUrl) {
+        LinkCreateDTO dto = new LinkCreateDTO();
+        dto.setOriginalUrl(originalUrl);
+        return dto;
     }
 
     private static Link link(String shortCode, String originalUrl) {
@@ -182,7 +210,7 @@ class LinkServiceImplTest {
     @DisplayName("Redis 与布隆过滤器都没配上 → 纯 DB 模式仍能正常返回")
     void withoutRedisAndBloom_shouldDegradeToDb() {
         // 不走 @InjectMocks，自己 new 一个不注入可选依赖的实例
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
         when(linkMapper.selectOne(any())).thenReturn(link("plain1", "https://www.degraded.com"));
 
         assertEquals("https://www.degraded.com", degraded.getOriginalUrl("plain1"));
@@ -203,7 +231,7 @@ class LinkServiceImplTest {
     @Test
     @DisplayName("Redis 不可用 → 计数直接跳过，不抛异常拖垮跳转")
     void incrementVisitCount_withoutRedis_shouldNotThrow() {
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
 
         degraded.incrementVisitCount("abc123");
     }
@@ -211,16 +239,18 @@ class LinkServiceImplTest {
     // ==================== 创建短链 ====================
 
     @Test
-    @DisplayName("创建短链 → 号段取 id、Base62 编码、一次 INSERT、同步进布隆过滤器")
+    @DisplayName("创建短链 → 号段取 id、Base62 编码、绑定当前用户、一次 INSERT、同步进布隆")
     void createLink_shouldEncodeIdAndSyncBloomFilter() {
-        String originalUrl = "https://www.baidu.com";
+        CurrentHolder.setCurrentId(1001L);
         when(idSegmentManager.getNextId(IdSegmentManager.BIZ_TAG_LINK)).thenReturn(1L);
 
-        Link result = linkService.createLink(originalUrl);
+        LinkVO result = linkService.createLink(createDto("https://www.baidu.com"));
 
         assertEquals(1L, result.getId());
         assertEquals("1", result.getShortCode());   // Base62.encode(1) = "1"
-        assertEquals(originalUrl, result.getOriginalUrl());
+        assertEquals("https://www.baidu.com", result.getOriginalUrl());
+        // shortUrl 是域名 + 短码拼出来的，前端拿去直接展示
+        assertEquals("http://localhost:8080/1", result.getShortUrl());
         assertNotNull(result.getVisitCount());
 
         // 新短码必须进布隆，否则刚建的链会被第一层拦成 404
@@ -228,5 +258,49 @@ class LinkServiceImplTest {
         // 号段模式一条 INSERT 就够，不需要回填短码
         verify(linkMapper, times(1)).insertWithFill(any(Link.class));
         verify(linkMapper, never()).updateByIdWithFill(any(Link.class));
+    }
+
+    @Test
+    @DisplayName("创建短链 → 归属用户来自登录态，不是请求体")
+    void createLink_shouldBindCurrentUser() {
+        CurrentHolder.setCurrentId(1001L);
+        when(idSegmentManager.getNextId(any())).thenReturn(2L);
+
+        linkService.createLink(createDto("https://www.baidu.com"));
+
+        ArgumentCaptor<Link> captor = ArgumentCaptor.forClass(Link.class);
+        verify(linkMapper).insertWithFill(captor.capture());
+        // LinkCreateDTO 里根本没有 userId 字段，想挂到别人名下都没有入口
+        assertEquals(1001L, captor.getValue().getUserId());
+    }
+
+    @Test
+    @DisplayName("创建短链 → 默认启用状态，过期时间原样落库")
+    void createLink_shouldSetStatusAndExpireTime() {
+        CurrentHolder.setCurrentId(1001L);
+        when(idSegmentManager.getNextId(any())).thenReturn(3L);
+        LocalDateTime expireAt = LocalDateTime.now().plusDays(7);
+        LinkCreateDTO dto = createDto("https://www.baidu.com");
+        dto.setExpireTime(expireAt);
+
+        linkService.createLink(dto);
+
+        ArgumentCaptor<Link> captor = ArgumentCaptor.forClass(Link.class);
+        verify(linkMapper).insertWithFill(captor.capture());
+        assertEquals(StatusConstant.ENABLED, captor.getValue().getStatus());
+        assertEquals(expireAt, captor.getValue().getExpireTime());
+    }
+
+    @Test
+    @DisplayName("未登录（ThreadLocal 为空）→ 401，且不写库")
+    void createLink_withoutLogin_shouldThrowUnauthorized() {
+        // 拦截器没生效时会出现这种情况，不能让它插一条 userId 为 null 的脏数据
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> linkService.createLink(createDto("https://www.baidu.com")));
+
+        assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
+        verify(linkMapper, never()).insertWithFill(any(Link.class));
+        // 也不能白白浪费一个号段里的 id
+        verify(idSegmentManager, never()).getNextId(any());
     }
 }

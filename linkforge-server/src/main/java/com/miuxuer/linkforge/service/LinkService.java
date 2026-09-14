@@ -1,6 +1,7 @@
 package com.miuxuer.linkforge.service;
 
-import com.miuxuer.linkforge.entity.Link;
+import com.miuxuer.linkforge.dto.LinkCreateDTO;
+import com.miuxuer.linkforge.vo.LinkVO;
 
 /**
  * 短链服务接口。实现见 {@code impl/LinkServiceImpl}。
@@ -10,14 +11,16 @@ import com.miuxuer.linkforge.entity.Link;
 public interface LinkService {
 
     /**
-     * 创建短链：分配 id、Base62 编码成短码、入库。
+     * 创建短链：分配 id、Base62 编码成短码、绑定当前登录用户、入库。
      *
-     * <p>本阶段还没有用户概念，绑定归属用户是阶段 3 的事。
+     * <p>归属用户从 {@code CurrentHolder} 取，<b>接口签名里没有 userId 参数</b> ——
+     * 从签名上就不给"把短链挂到别人名下"留口子。
      *
-     * @param originalUrl 原始长链接
-     * @return 已保存的实体，含生成的 shortCode
+     * @param dto 创建入参
+     * @return 新建的短链（含 shortCode 和完整 shortUrl）
+     * @throws com.miuxuer.linkforge.exception.BusinessException 未登录
      */
-    Link createLink(String originalUrl);
+    LinkVO createLink(LinkCreateDTO dto);
 
     /**
      * 按短码取原始长链接，供 302 跳转用。
@@ -25,7 +28,7 @@ public interface LinkService {
      * <p>内部走四层防护：布隆过滤器 → Redis 缓存 → 互斥锁 → 数据库。
      *
      * @param shortCode 短码
-     * @return 原始长链接；不存在返回 null
+     * @return 原始长链接；不存在、已停用或已过期都返回 null
      */
     String getOriginalUrl(String shortCode);
 
