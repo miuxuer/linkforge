@@ -29,6 +29,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -330,11 +331,11 @@ public class LinkServiceImpl implements LinkService {
      */
     private String queryDbAndCache(String shortCode, String cacheKey) {
         Link link = selectByShortCode(shortCode);
-        if (link == null) {
+        if (!isAvailable(link)) {
             return null;
         }
         stringRedisTemplate.opsForValue().set(
-                cacheKey, link.getOriginalUrl(), randomCacheTtl());
+                cacheKey, link.getOriginalUrl(), cacheTtlFor(link));
         return link.getOriginalUrl();
     }
 
@@ -346,16 +347,60 @@ public class LinkServiceImpl implements LinkService {
      */
     private String queryDbDirect(String shortCode) {
         Link link = selectByShortCode(shortCode);
-        if (link == null) {
+        if (!isAvailable(link)) {
             return null;
         }
         if (stringRedisTemplate != null) {
             stringRedisTemplate.opsForValue().set(
                     RedisKeyConstant.LINK_CACHE + shortCode,
                     link.getOriginalUrl(),
-                    randomCacheTtl());
+                    cacheTtlFor(link));
         }
         return link.getOriginalUrl();
+    }
+
+    /**
+     * 短链当前是否可跳转：存在、已启用、且未过期。
+     *
+     * <p>判断放在<b>回填缓存之前</b>很关键：不可用的短链压根不进缓存。
+     * 否则一条已停用的短链会被缓存下来，接下来 25~35 分钟里每次命中缓存都照跳不误 ——
+     * 用户以为停用生效了，实际没有。
+     */
+    private boolean isAvailable(Link link) {
+        if (link == null) {
+            return false;
+        }
+        if (link.getStatus() == null || link.getStatus() != StatusConstant.ENABLED) {
+            return false;
+        }
+        // expireTime 为 null 表示永不过期
+        return link.getExpireTime() == null
+                || link.getExpireTime().isAfter(LocalDateTime.now());
+    }
+
+    /**
+     * 算出这条短链该缓存多久。
+     *
+     * <p><b>不能无脑用固定的 25~35 分钟。</b> 假设一条短链 2 分钟后过期，
+     * 缓存却按 30 分钟存 —— 过期之后缓存还在，这 28 分钟里它一直在正常跳转，
+     * 过期时间形同虚设。所以取"基础 TTL"和"距离过期还剩多久"里的较小值，
+     * 让过期时间是秒级生效的。
+     */
+    private Duration cacheTtlFor(Link link) {
+        Duration baseTtl = randomCacheTtl();
+        if (link.getExpireTime() == null) {
+            return baseTtl;
+        }
+        Duration remaining = Duration.between(LocalDateTime.now(), link.getExpireTime());
+        if (remaining.compareTo(baseTtl) >= 0) {
+            return baseTtl;
+        }
+        // 剩余时间可能刚好在这几行之间变成 0 或负数（判断 isAvailable 时的 now
+        // 和这里的 now 不是同一个时刻）。Redis 不接受非正的过期时间，会直接报错，
+        // 所以兜一个最小值。
+        return remaining.isZero() || remaining.isNegative()
+                ? Duration.ofSeconds(1)
+                : remaining;
     }
 
     @Override

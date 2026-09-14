@@ -135,10 +135,12 @@ class LinkServiceImplTest {
         return dto;
     }
 
+    /** 造一条"可正常跳转"的短链：启用 + 永不过期。 */
     private static Link link(String shortCode, String originalUrl) {
         Link link = new Link();
         link.setShortCode(shortCode);
         link.setOriginalUrl(originalUrl);
+        link.setStatus(StatusConstant.ENABLED);
         return link;
     }
 
@@ -237,6 +239,76 @@ class LinkServiceImplTest {
 
         // 降级路径虽然不持锁，但依然会回填缓存
         verify(valueOperations).set(eq(CACHE_KEY + shortCode), eq(originalUrl), any(Duration.class));
+    }
+
+    // ==================== 跳转有效性校验（状态 / 过期） ====================
+
+    @Test
+    @DisplayName("已停用的短链 → 返回 null，且不写进缓存")
+    void disabledLink_shouldNotRedirect() {
+        String shortCode = "off001";
+        Link disabled = link(shortCode, "https://www.example.com");
+        disabled.setStatus(StatusConstant.DISABLED);
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        when(valueOperations.get(CACHE_KEY + shortCode)).thenReturn(null);
+        when(linkMapper.selectOne(any())).thenReturn(disabled);
+
+        assertNull(linkService.getOriginalUrl(shortCode));
+
+        // 关键：不能缓存。缓存了的话，接下来 25~35 分钟命中缓存时照跳不误，
+        // 用户会以为"停用"这个操作没生效
+        verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("已过期的短链 → 返回 null，且不写进缓存")
+    void expiredLink_shouldNotRedirect() {
+        String shortCode = "exp001";
+        Link expired = link(shortCode, "https://www.example.com");
+        expired.setExpireTime(LocalDateTime.now().minusMinutes(1));
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        when(valueOperations.get(CACHE_KEY + shortCode)).thenReturn(null);
+        when(linkMapper.selectOne(any())).thenReturn(expired);
+
+        assertNull(linkService.getOriginalUrl(shortCode));
+        verify(valueOperations, never()).set(anyString(), anyString(), any(Duration.class));
+    }
+
+    @Test
+    @DisplayName("未过期 → 正常跳转，且缓存 TTL 不超过「距离过期还剩多久」")
+    void linkExpiringSoon_shouldCapCacheTtl() {
+        String shortCode = "soon01";
+        Link soon = link(shortCode, "https://www.example.com");
+        // 还有 2 分钟过期，而默认缓存 TTL 是 25~35 分钟
+        soon.setExpireTime(LocalDateTime.now().plusMinutes(2));
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        when(valueOperations.get(CACHE_KEY + shortCode)).thenReturn(null);
+        when(linkMapper.selectOne(any())).thenReturn(soon);
+
+        assertEquals("https://www.example.com", linkService.getOriginalUrl(shortCode));
+
+        ArgumentCaptor<Duration> ttlCaptor = ArgumentCaptor.forClass(Duration.class);
+        verify(valueOperations).set(eq(CACHE_KEY + shortCode), anyString(), ttlCaptor.capture());
+
+        // 不封顶的话，这条链在过期后还能靠缓存继续跳将近半小时
+        assertTrue(ttlCaptor.getValue().toMinutes() <= 2,
+                "缓存 TTL 超过了短链剩余寿命，过期时间会形同虚设: " + ttlCaptor.getValue());
+        assertTrue(ttlCaptor.getValue().toSeconds() > 0, "TTL 必须为正数");
+    }
+
+    @Test
+    @DisplayName("status 为 null 的脏数据 → 按不可用处理，不放行")
+    void nullStatus_shouldNotRedirect() {
+        String shortCode = "dirty1";
+        Link dirty = new Link();
+        dirty.setShortCode(shortCode);
+        dirty.setOriginalUrl("https://www.example.com");
+        // status 没赋值 —— 数据库里如果有这种历史脏数据，不能当成"启用"
+        when(bloomFilter.mightContain(shortCode)).thenReturn(true);
+        when(valueOperations.get(CACHE_KEY + shortCode)).thenReturn(null);
+        when(linkMapper.selectOne(any())).thenReturn(dirty);
+
+        assertNull(linkService.getOriginalUrl(shortCode));
     }
 
     // ==================== 降级可用性 ====================
