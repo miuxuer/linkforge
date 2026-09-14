@@ -105,6 +105,9 @@ class LinkServiceImplTest {
     @Mock
     private LinkCacheEvictor linkCacheEvictor;
 
+    @Mock
+    private PendingVisitReader pendingVisitReader;
+
     private LinkProperties linkProperties;
 
     private LinkServiceImpl linkService;
@@ -133,12 +136,21 @@ class LinkServiceImplTest {
         linkProperties = new LinkProperties();
         linkProperties.setDomain("http://localhost:8080");
 
-        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
+        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor, pendingVisitReader);
         // 这两个是 @Autowired(required = false) 的可选依赖，构造器注不进去，
         // 测试里手动塞进去
         ReflectionTestUtils.setField(linkService, "stringRedisTemplate", stringRedisTemplate);
         ReflectionTestUtils.setField(linkService, "bloomFilter", bloomFilter);
         when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+
+        // pendingVisitReader 是 mock，默认 read 返回空 Map、merge 返回 0 ——
+        // 后者会把所有访问量抹成 0。这里按真实语义打桩：
+        // 没有增量时原样返回数据库里的值（增量的部分由 PendingVisitReaderTest 覆盖）
+        when(pendingVisitReader.read(any())).thenReturn(java.util.Map.of());
+        when(pendingVisitReader.merge(any(), anyString(), any())).thenAnswer(invocation -> {
+            Long dbValue = invocation.getArgument(0);
+            return dbValue == null ? 0L : dbValue;
+        });
     }
 
     @AfterEach
@@ -367,7 +379,7 @@ class LinkServiceImplTest {
     @DisplayName("Redis 与布隆过滤器都没配上 → 纯 DB 模式仍能正常返回")
     void withoutRedisAndBloom_shouldDegradeToDb() {
         // 不走 @InjectMocks，自己 new 一个不注入可选依赖的实例
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor, pendingVisitReader);
         when(linkMapper.selectOne(any())).thenReturn(link("plain1", "https://www.degraded.com"));
 
         assertEquals("https://www.degraded.com", degraded.getOriginalUrl("plain1"));
@@ -388,7 +400,7 @@ class LinkServiceImplTest {
     @Test
     @DisplayName("Redis 不可用 → 计数直接跳过，不抛异常拖垮跳转")
     void incrementVisitCount_withoutRedis_shouldNotThrow() {
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader, linkCacheEvictor, pendingVisitReader);
 
         degraded.incrementVisitCount("abc123");
     }
@@ -573,6 +585,43 @@ class LinkServiceImplTest {
 
         assertEquals(ResultCode.UNAUTHORIZED.getHttpStatus(), e.getHttpStatus());
         verify(linkMapper, never()).selectPage(any(), any());
+    }
+
+    @Test
+    @DisplayName("★ 列表里的访问量必须合上未同步增量，否则显示的是 5 分钟前的数字")
+    void pageMyLinks_shouldMergePendingIncrement() {
+        CurrentHolder.setCurrentId(1001L);
+        Page<Link> dbPage = new Page<>(1, 10);
+        dbPage.setTotal(1);
+        Link entity = link("abc123", "https://www.baidu.com");
+        entity.setId(9L);
+        // 数据库里还是 0 —— 计数在 Redis 累加，定时任务每 5 分钟才回写一次
+        entity.setVisitCount(0L);
+        dbPage.setRecords(List.of(entity));
+        when(linkMapper.selectPage(any(), any())).thenReturn(dbPage);
+        when(pendingVisitReader.merge(any(), anyString(), any())).thenReturn(6L);
+
+        PageResult<LinkVO> result = linkService.pageMyLinks(new LinkPageQueryDTO());
+
+        // 这就是用户实际碰到的问题：看板显示 6 次、短链列表显示 0 次，一眼就看出对不上。
+        // 根因是访问量在三个地方展示（列表 / 详情 / 看板），第一版只在看板里合了增量
+        assertEquals(6L, result.getRecords().get(0).getVisitCount());
+
+        // 同时确认 merge 收到的是"数据库里的那个值"，而不是被别处改过的
+        verify(pendingVisitReader).merge(eq(0L), eq("abc123"), any());
+    }
+
+    @Test
+    @DisplayName("★ 详情页同样要合增量（列表修了、详情漏了的话问题会重现）")
+    void getLink_shouldMergePendingIncrement() {
+        CurrentHolder.setCurrentId(1001L);
+        Link entity = ownedLink(9L, 1001L, "abc123");
+        entity.setVisitCount(0L);
+        when(linkMapper.selectById(9L)).thenReturn(entity);
+        when(pendingVisitReader.merge(any(), anyString(), any())).thenReturn(6L);
+
+        assertEquals(6L, linkService.getLink(9L).getVisitCount());
+        verify(pendingVisitReader).merge(eq(0L), eq("abc123"), any());
     }
 
     // ==================== 修改 / 删除 ====================

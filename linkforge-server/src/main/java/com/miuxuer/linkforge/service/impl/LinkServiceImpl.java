@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -84,6 +85,7 @@ public class LinkServiceImpl implements LinkService {
     private final LinkProperties linkProperties;
     private final OssImageLoader ossImageLoader;
     private final LinkCacheEvictor linkCacheEvictor;
+    private final PendingVisitReader pendingVisitReader;
 
     /** 可选依赖：Redis 不可用时自动降级为纯 DB 模式。 */
     @Autowired(required = false)
@@ -97,12 +99,14 @@ public class LinkServiceImpl implements LinkService {
                            IdSegmentManager idSegmentManager,
                            LinkProperties linkProperties,
                            OssImageLoader ossImageLoader,
-                           LinkCacheEvictor linkCacheEvictor) {
+                           LinkCacheEvictor linkCacheEvictor,
+                           PendingVisitReader pendingVisitReader) {
         this.linkMapper = linkMapper;
         this.idSegmentManager = idSegmentManager;
         this.linkProperties = linkProperties;
         this.ossImageLoader = ossImageLoader;
         this.linkCacheEvictor = linkCacheEvictor;
+        this.pendingVisitReader = pendingVisitReader;
     }
 
     @Override
@@ -168,17 +172,42 @@ public class LinkServiceImpl implements LinkService {
 
         Page<Link> result = linkMapper.selectPage(pageParam, wrapper);
 
-        List<LinkVO> records = result.getRecords().stream()
-                .map(link -> LinkVO.from(link, linkProperties.getDomain()))
-                .toList();
+        return PageResult.of(result.getTotal(), result.getCurrent(), result.getSize(),
+                toVos(result.getRecords()));
+    }
 
-        return PageResult.of(result.getTotal(), result.getCurrent(), result.getSize(), records);
+    /**
+     * 把实体列表转成 VO 列表，并把"还没同步到数据库"的访问增量补上。
+     *
+     * <p><b>全项目只有这一个地方构造 {@link LinkVO}</b>（新增时除外，那条链刚建出来
+     * 访问量必然是 0）。做成唯一入口是因为踩过一次：访问量在三个地方展示
+     * （短链列表、短链详情、数据看板），第一版只在看板里合了 Redis 增量，
+     * 结果是"看板显示 6 次、列表显示 0 次"，用户一眼就看出对不上。
+     *
+     * <p>同一份数据在多处展示时，处理逻辑只留一份才不会漏。
+     */
+    private List<LinkVO> toVos(List<Link> links) {
+        Map<String, Long> increments = pendingVisitReader.read(
+                links.stream().map(Link::getShortCode).toList());
+
+        return links.stream()
+                .map(link -> {
+                    LinkVO vo = LinkVO.from(link, linkProperties.getDomain());
+                    // ★ 数据库里的 visit_count 最多滞后 5 分钟（计数在 Redis 累加、
+                    // 定时任务每 5 分钟批量回写），这里把差值补上才是用户看到的真实值
+                    vo.setVisitCount(pendingVisitReader.merge(
+                            link.getVisitCount(), link.getShortCode(), increments));
+                    return vo;
+                })
+                .toList();
     }
 
     @Override
     public LinkVO getLink(Long id) {
         Long userId = CurrentHolder.requireCurrentId();
-        return LinkVO.from(requireOwnedLink(id, userId), linkProperties.getDomain());
+        // 走 toVos 而不是直接 LinkVO.from —— 详情页同样要展示访问量，
+        // 单独构造就会漏掉 Redis 增量那一部分
+        return toVos(List.of(requireOwnedLink(id, userId))).get(0);
     }
 
     @Override

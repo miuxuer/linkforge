@@ -20,14 +20,11 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
-import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.ValueOperations;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,20 +51,16 @@ class StatServiceImplTest {
     private VisitLogMapper visitLogMapper;
 
     @Mock
-    private StringRedisTemplate stringRedisTemplate;
-
-    @Mock
-    private ValueOperations<String, String> valueOperations;
+    private PendingVisitReader pendingVisitReader;
 
     private StatServiceImpl statService;
 
     @BeforeEach
     void setUp() {
-        statService = new StatServiceImpl(linkMapper, visitLogMapper);
-        ReflectionTestUtils.setField(statService, "stringRedisTemplate", stringRedisTemplate);
+        statService = new StatServiceImpl(linkMapper, visitLogMapper, pendingVisitReader);
         CurrentHolder.setCurrentId(USER_ID);
         // 默认没有"待同步增量"，个别用例再覆盖
-        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(pendingVisitReader.read(any())).thenReturn(Map.of());
         when(linkMapper.selectShortCodesByUser(anyLong())).thenReturn(List.of());
     }
 
@@ -128,50 +121,13 @@ class StatServiceImplTest {
         when(linkMapper.sumVisitCountByUser(USER_ID)).thenReturn(100L);
         when(linkMapper.selectShortCodesByUser(USER_ID)).thenReturn(List.of("a", "b"));
         // 这两条短链各自还有 3 次和 2 次访问压在 Redis 里没同步
-        when(valueOperations.multiGet(any())).thenReturn(List.of("3", "2"));
+        when(pendingVisitReader.read(any())).thenReturn(Map.of("a", 3L, "b", 2L));
 
         StatOverviewVO overview = statService.overview();
 
         // 只读数据库的话这里是 100 —— 用户刚访问完自己的短链就打开看板，
         // 会看到数字没变，以为统计坏了。实际上数据没错，只是还没到同步周期
         assertThat(overview.getTotalVisits()).isEqualTo(105L);
-    }
-
-    @Test
-    @DisplayName("Redis 里有 key 但值已过期/被删 → 当 0 处理，不抛 NPE")
-    void overview_nullRedisValue_shouldBeTreatedAsZero() {
-        when(linkMapper.sumVisitCountByUser(USER_ID)).thenReturn(50L);
-        when(linkMapper.selectShortCodesByUser(USER_ID)).thenReturn(List.of("a", "b"));
-        // multiGet 对不存在的 key 返回的列表里会有 null
-        when(valueOperations.multiGet(any())).thenReturn(Arrays.asList("5", null));
-
-        assertThat(statService.overview().getTotalVisits()).isEqualTo(55L);
-    }
-
-    @Test
-    @DisplayName("用 MGET 一次拿回来，不是循环 GET")
-    void overview_shouldUseMultiGet() {
-        when(linkMapper.selectShortCodesByUser(USER_ID)).thenReturn(List.of("a", "b", "c"));
-
-        statService.overview();
-
-        // 循环 GET 的话，一百条短链就要发一百次请求，看板打开多等一百个网络往返。
-        // MGET 一次就够，这是 Redis 专门为这场景提供的命令
-        verify(valueOperations).multiGet(List.of(
-                RedisKeyConstant.LINK_VISITS + "a",
-                RedisKeyConstant.LINK_VISITS + "b",
-                RedisKeyConstant.LINK_VISITS + "c"));
-        verify(valueOperations, never()).get(anyString());
-    }
-
-    @Test
-    @DisplayName("Redis 不可用 → 只报已同步的部分，不让整个看板打不开")
-    void overview_withoutRedis_shouldDegrade() {
-        ReflectionTestUtils.setField(statService, "stringRedisTemplate", null);
-        when(linkMapper.sumVisitCountByUser(USER_ID)).thenReturn(77L);
-
-        // 数字偏小是可以接受的，整个看板 500 不能接受
-        assertThat(statService.overview().getTotalVisits()).isEqualTo(77L);
     }
 
     // ==================== 趋势 ====================
@@ -256,7 +212,7 @@ class StatServiceImplTest {
         // a：库里 10 次、没有待同步；b：库里 0 次、但有 20 次压在 Redis 里
         when(linkMapper.selectAllByUser(USER_ID))
                 .thenReturn(List.of(linkOf(1L, "a", 10L), linkOf(2L, "b", 0L)));
-        when(valueOperations.multiGet(any())).thenReturn(List.of("0", "20"));
+        when(pendingVisitReader.read(any())).thenReturn(Map.of("b", 20L));
 
         List<LinkTopVO> top = statService.top(10);
 
