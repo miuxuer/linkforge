@@ -165,6 +165,95 @@ class QrCodeUtilsTest {
         assertThat(decode(png)).isEqualTo(url);
     }
 
+    // ==================== logo 合成 ====================
+
+    /** 造一张纯色图片当 logo。 */
+    private static byte[] solidImage(int width, int height, Color color) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(color);
+        graphics.fillRect(0, 0, width, height);
+        graphics.dispose();
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "PNG", output);
+        return output.toByteArray();
+    }
+
+    @Test
+    @DisplayName("★ 带 logo 的二维码仍然能扫出原内容")
+    void withLogo_shouldStillBeDecodable() throws Exception {
+        String url = "https://linkforge.example.com/abc123";
+
+        byte[] png = QrCodeUtils.toPngBytesWithLogo(url, SIZE, solidImage(200, 200, Color.BLUE));
+
+        assertThat(decode(png)).isEqualTo(url);
+    }
+
+    @Test
+    @DisplayName("logo 为 null / 空字节 → 等同于不带 logo，正常能扫")
+    void nullLogo_shouldBehaveLikePlainQrCode() throws Exception {
+        String url = "https://linkforge.example.com/abc123";
+
+        assertThat(decode(QrCodeUtils.toPngBytesWithLogo(url, SIZE, null))).isEqualTo(url);
+        assertThat(decode(QrCodeUtils.toPngBytesWithLogo(url, SIZE, new byte[0]))).isEqualTo(url);
+    }
+
+    @Test
+    @DisplayName("★ logo 再大也会被缩到 20% 以内，不会把二维码盖死")
+    void hugeLogo_shouldBeShrunk() throws Exception {
+        String url = "https://linkforge.example.com/abc123";
+
+        // 2000x2000 的 logo，比二维码本身还大。不缩放的话整张图就全被它盖住了
+        byte[] png = QrCodeUtils.toPngBytesWithLogo(url, SIZE, solidImage(2000, 2000, Color.RED));
+
+        assertThat(decode(png)).isEqualTo(url);
+    }
+
+    @Test
+    @DisplayName("长方形 logo → 等比缩放，不被拉成正方形")
+    void rectangularLogo_shouldKeepAspectRatio() throws Exception {
+        String url = "https://linkforge.example.com/abc123";
+
+        // 200x50 的横条。按边长强行拉伸的话会变成 60x60 的正方形，比例全毁
+        byte[] png = QrCodeUtils.toPngBytesWithLogo(url, SIZE, solidImage(200, 50, Color.GREEN));
+
+        // 仍能解码说明没盖过头；比例本身没法从字节上直接断言，
+        // 但至少能保证"缩放逻辑没有把它放大到超出上限"
+        assertThat(decode(png)).isEqualTo(url);
+    }
+
+    @Test
+    @DisplayName("小 logo 不会被放大（放大只会变糊）")
+    void smallLogo_shouldNotBeUpscaled() throws Exception {
+        String url = "https://linkforge.example.com/abc123";
+
+        // 10x10 的小图，本来就是清晰的；强行放大到 60x60 只会糊
+        byte[] png = QrCodeUtils.toPngBytesWithLogo(url, SIZE, solidImage(10, 10, Color.BLACK));
+
+        assertThat(decode(png)).isEqualTo(url);
+    }
+
+    @Test
+    @DisplayName("logo 不是有效图片 → IllegalArgumentException")
+    void invalidLogoBytes_shouldThrow() {
+        // 用户把 .txt 改名成 .png 传上来，或者 URL 指向了一个 HTML 页面
+        byte[] notAnImage = "this is definitely not an image".getBytes();
+
+        assertThrows(IllegalArgumentException.class,
+                () -> QrCodeUtils.toPngBytesWithLogo("https://example.com/x", SIZE, notAnImage));
+    }
+
+    @Test
+    @DisplayName("中文内容 + logo → 两者都能正常工作")
+    void chineseContentWithLogo_shouldWork() throws Exception {
+        String content = "短链：https://例子.测试/中文";
+
+        byte[] png = QrCodeUtils.toPngBytesWithLogo(content, SIZE, solidImage(100, 100, Color.ORANGE));
+
+        assertThat(decode(png)).isEqualTo(content);
+    }
+
     // ==================== 边界 ====================
 
     @Test

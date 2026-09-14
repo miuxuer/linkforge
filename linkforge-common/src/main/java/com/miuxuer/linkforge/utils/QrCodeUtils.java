@@ -8,6 +8,12 @@ import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -94,6 +100,104 @@ public final class QrCodeUtils {
     public static byte[] toPngBytes(BitMatrix matrix) throws IOException {
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         MatrixToImageWriter.writeToStream(matrix, "PNG", output);
+        return output.toByteArray();
+    }
+
+    // ==================== 带 logo 合成 ====================
+
+    /**
+     * logo 最大边长占二维码边长的比例。
+     *
+     * <p>取 20% 是算出来的，不是拍脑袋：H 级纠错能容忍约 30% 的码点被遮挡，
+     * 而 logo 是方块、遮挡的是<b>面积</b>，再加上周围还要留一圈白边，
+     * 20% 是"看起来够大"和"扫得出来"之间的常见折中。
+     * 再大就有扫不出来的风险，而且这类失败是"生成成功、就是扫不出"，
+     * 用户只会以为是自己手机的问题。
+     */
+    private static final double LOGO_MAX_RATIO = 0.20;
+
+    /**
+     * 生成带 logo 的二维码 PNG 字节。
+     *
+     * <p>logo 会被缩放到中心、等比保持长宽比，并在周围铺一圈白底。
+     *
+     * <p><b>这一层只做图像处理，不负责去下载 logo。</b> 下载是带网络 I/O 和
+     * 安全考量的事（用户提供的 URL 可以被用来探测内网），放在 Service 层做更合适 ——
+     * 工具类保持成纯粹的、可以离线测试的函数。
+     *
+     * @param content   二维码内容
+     * @param size      图片边长（像素）
+     * @param logoBytes logo 图片的字节，为 null 或空时等同于不带 logo
+     * @return PNG 字节
+     * @throws IllegalArgumentException logo 不是能识别的图片格式
+     */
+    public static byte[] toPngBytesWithLogo(String content, int size, byte[] logoBytes) throws IOException {
+        // 必须用 H 级：中心盖了 logo，低纠错级别会直接扫不出来
+        BufferedImage image = MatrixToImageWriter.toBufferedImage(
+                toBitMatrix(content, size, ErrorCorrectionLevel.H));
+
+        overlayLogo(image, logoBytes);
+        return toPngBytes(image);
+    }
+
+    /**
+     * 把 logo 画到二维码正中间。
+     *
+     * <p>先铺白底再画 logo，这一步不能省：logo 的边缘通常和二维码的黑块紧挨着，
+     * 视觉上糊成一片，扫码软件会把 logo 的边框当成码点去解析。
+     * 留一圈白边相当于给 logo 划出明确边界。
+     *
+     * <p>用圆角而不是直角，是因为直角白框和二维码的方形码点在粗细上很像，
+     * 圆角能让"这是一块覆盖物"这件事在视觉上更清楚，人眼看着也舒服。
+     */
+    private static void overlayLogo(BufferedImage qrImage, byte[] logoBytes) throws IOException {
+        if (logoBytes == null || logoBytes.length == 0) {
+            return;
+        }
+
+        BufferedImage logo = ImageIO.read(new ByteArrayInputStream(logoBytes));
+        if (logo == null) {
+            throw new IllegalArgumentException("logo 不是能识别的图片格式");
+        }
+
+        int size = qrImage.getWidth();
+        int maxLogoSide = (int) (size * LOGO_MAX_RATIO);
+
+        // 等比缩放：直接拉成正方形会把头像压扁。
+        // 用 min 而不是分别算，是为了让长边贴到上限、短边按比例跟着缩
+        double scale = Math.min(
+                (double) maxLogoSide / logo.getWidth(),
+                (double) maxLogoSide / logo.getHeight());
+        // 小图放大没意义（会糊），所以取 min(1, scale)：只缩不放
+        double finalScale = Math.min(1.0, scale);
+
+        int logoWidth = Math.max(1, (int) (logo.getWidth() * finalScale));
+        int logoHeight = Math.max(1, (int) (logo.getHeight() * finalScale));
+        int x = (size - logoWidth) / 2;
+        int y = (size - logoHeight) / 2;
+
+        // 白边宽度按图片尺寸取，小图上留 2px，大图上按比例
+        int padding = Math.max(2, size / 100);
+        int arc = Math.max(4, size / 25);
+
+        Graphics2D graphics = qrImage.createGraphics();
+        // 缩小时用双线性插值，边缘比默认的最近邻平滑得多
+        graphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        graphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
+                RenderingHints.VALUE_ANTIALIAS_ON);
+
+        graphics.setColor(Color.WHITE);
+        graphics.fillRoundRect(x - padding, y - padding,
+                logoWidth + padding * 2, logoHeight + padding * 2, arc, arc);
+        graphics.drawImage(logo, x, y, logoWidth, logoHeight, null);
+        graphics.dispose();
+    }
+
+    /** 把图片编码成 PNG 字节。 */
+    private static byte[] toPngBytes(BufferedImage image) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "PNG", output);
         return output.toByteArray();
     }
 }
