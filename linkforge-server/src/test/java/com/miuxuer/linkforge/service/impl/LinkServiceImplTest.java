@@ -1,5 +1,9 @@
 package com.miuxuer.linkforge.service.impl;
 
+import com.google.zxing.BinaryBitmap;
+import com.google.zxing.MultiFormatReader;
+import com.google.zxing.client.j2se.BufferedImageLuminanceSource;
+import com.google.zxing.common.HybridBinarizer;
 import com.baomidou.mybatisplus.core.MybatisConfiguration;
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
@@ -39,6 +43,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -87,6 +98,9 @@ class LinkServiceImplTest {
     @Mock
     private IdSegmentManager idSegmentManager;
 
+    @Mock
+    private OssImageLoader ossImageLoader;
+
     private LinkProperties linkProperties;
 
     private LinkServiceImpl linkService;
@@ -115,7 +129,7 @@ class LinkServiceImplTest {
         linkProperties = new LinkProperties();
         linkProperties.setDomain("http://localhost:8080");
 
-        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
+        linkService = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
         // 这两个是 @Autowired(required = false) 的可选依赖，构造器注不进去，
         // 测试里手动塞进去
         ReflectionTestUtils.setField(linkService, "stringRedisTemplate", stringRedisTemplate);
@@ -317,7 +331,7 @@ class LinkServiceImplTest {
     @DisplayName("Redis 与布隆过滤器都没配上 → 纯 DB 模式仍能正常返回")
     void withoutRedisAndBloom_shouldDegradeToDb() {
         // 不走 @InjectMocks，自己 new 一个不注入可选依赖的实例
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
         when(linkMapper.selectOne(any())).thenReturn(link("plain1", "https://www.degraded.com"));
 
         assertEquals("https://www.degraded.com", degraded.getOriginalUrl("plain1"));
@@ -338,7 +352,7 @@ class LinkServiceImplTest {
     @Test
     @DisplayName("Redis 不可用 → 计数直接跳过，不抛异常拖垮跳转")
     void incrementVisitCount_withoutRedis_shouldNotThrow() {
-        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties);
+        LinkServiceImpl degraded = new LinkServiceImpl(linkMapper, idSegmentManager, linkProperties, ossImageLoader);
 
         degraded.incrementVisitCount("abc123");
     }
@@ -637,5 +651,99 @@ class LinkServiceImplTest {
 
         assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
         verify(linkMapper, never()).delete(any());
+    }
+
+    @Test
+    @DisplayName("修改短链 → qrLogo 也会被写进去")
+    void updateLink_shouldPersistQrLogo() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 1001L, "abc"));
+        when(linkMapper.updateWithFill(any(Link.class), any())).thenReturn(1);
+
+        LinkUpdateDTO dto = updateDto();
+        dto.setQrLogo("https://miuxuer.oss-cn-beijing.aliyuncs.com/2026/09/logo.png");
+        linkService.updateLink(1L, dto);
+
+        // 注意 getSqlSegment() 拿到的是 WHERE 部分，SET 子句要用 getSqlSet()。
+        // 这个区别很容易搞混 —— 用错了会得到"条件里有、赋值里没有"的假象
+        assertTrue(captureUpdateWrapper().getSqlSet().contains("qr_logo"),
+                "改了 logo 却没有写进 SET 子句");
+    }
+
+    // ==================== 二维码 ====================
+
+    /** 用 ZXing 把生成的二维码解回文本。 */
+    private static String decodeQrCode(byte[] pngBytes) throws Exception {
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(pngBytes));
+        BinaryBitmap bitmap = new BinaryBitmap(
+                new HybridBinarizer(new BufferedImageLuminanceSource(image)));
+        return new MultiFormatReader().decode(bitmap).getText();
+    }
+
+    @Test
+    @DisplayName("生成二维码 → 内容是完整短链接，能被扫出来")
+    void generateQrCode_shouldEncodeShortUrl() throws Exception {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 1001L, "abc"));
+
+        byte[] png = linkService.generateQrCode(1L, 300);
+
+        // 二维码里放的是完整短链接而不是短码 —— 扫出来要能直接打开
+        assertEquals("http://localhost:8080/abc", decodeQrCode(png));
+    }
+
+    @Test
+    @DisplayName("短链配了 logo → 合成进去后仍然扫得出来")
+    void generateQrCode_withLogo_shouldStillBeDecodable() throws Exception {
+        CurrentHolder.setCurrentId(1001L);
+        Link owned = ownedLink(1L, 1001L, "abc");
+        owned.setQrLogo("https://miuxuer.oss-cn-beijing.aliyuncs.com/2026/09/logo.png");
+        when(linkMapper.selectById(1L)).thenReturn(owned);
+        when(ossImageLoader.load(anyString())).thenReturn(solidPng(100, 100));
+
+        byte[] png = linkService.generateQrCode(1L, 300);
+
+        assertEquals("http://localhost:8080/abc", decodeQrCode(png));
+    }
+
+    @Test
+    @DisplayName("★ logo 加载失败 → 退化成不带 logo 的二维码，而不是整单失败")
+    void generateQrCode_logoLoadFailure_shouldDegrade() throws Exception {
+        CurrentHolder.setCurrentId(1001L);
+        Link owned = ownedLink(1L, 1001L, "abc");
+        owned.setQrLogo("https://miuxuer.oss-cn-beijing.aliyuncs.com/2026/09/gone.png");
+        when(linkMapper.selectById(1L)).thenReturn(owned);
+        when(ossImageLoader.load(anyString())).thenThrow(new IOException("HTTP 404"));
+
+        byte[] png = linkService.generateQrCode(1L, 300);
+
+        // logo 只是装饰。因为 OSS 抖了一下就让用户拿不到二维码，
+        // 比"少个 logo"糟糕得多 —— 一个能扫的素二维码仍然是有用的
+        assertEquals("http://localhost:8080/abc", decodeQrCode(png));
+    }
+
+    @Test
+    @DisplayName("生成别人的短链二维码 → 403，不会泄露别人的短码")
+    void generateQrCode_notOwned_shouldThrowForbidden() {
+        CurrentHolder.setCurrentId(1001L);
+        when(linkMapper.selectById(1L)).thenReturn(ownedLink(1L, 2002L, "abc"));
+
+        BusinessException e = assertThrows(BusinessException.class,
+                () -> linkService.generateQrCode(1L, 300));
+
+        assertEquals(ResultCode.FORBIDDEN.getHttpStatus(), e.getHttpStatus());
+    }
+
+    /** 造一张纯色 PNG 当 logo。 */
+    private static byte[] solidPng(int width, int height) throws IOException {
+        BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D graphics = image.createGraphics();
+        graphics.setColor(Color.BLUE);
+        graphics.fillRect(0, 0, width, height);
+        graphics.dispose();
+
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        ImageIO.write(image, "PNG", output);
+        return output.toByteArray();
     }
 }

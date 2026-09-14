@@ -62,6 +62,22 @@ public interface LinkService {
     void deleteLink(Long id);
 
     /**
+     * 生成这条短链的二维码图片（PNG 字节）。
+     *
+     * <p>内容是完整短链接（域名 + 短码），如果这条短链配了 logo 就合成到中心。
+     *
+     * <p>本来可以用 HTTP 重定向把二维码生成交给第三方服务，但那样就把短链地址
+     * 发给了外部 —— 自己的数据自己画，也省一次网络往返。
+     *
+     * @param id   短链主键
+     * @param size 图片边长（像素）
+     * @return PNG 图片字节
+     * @throws com.miuxuer.linkforge.exception.LinkNotFoundException 短链不存在
+     * @throws com.miuxuer.linkforge.exception.BusinessException     短链不属于当前用户
+     */
+    byte[] generateQrCode(Long id, int size);
+
+    /**
      * 按短码取原始长链接，供 302 跳转用。
      *
      * <p>内部走四层防护：布隆过滤器 → Redis 缓存 → 互斥锁 → 数据库。

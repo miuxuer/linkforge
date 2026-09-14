@@ -33,4 +33,14 @@ public class LinkUpdateDTO {
 
     /** 过期时间，传 null 表示取消过期限制、改为永不过期。 */
     private LocalDateTime expireTime;
+
+    /**
+     * 二维码中间的 logo 地址，传 null 表示用不带 logo 的纯二维码。
+     *
+     * <p>地址一般来自 {@code /api/upload} 的返回值。服务端在合成时会校验它
+     * 必须落在自家 OSS 域名下 —— 否则这个字段就是一个让服务器去请求任意地址的入口
+     * （SSRF）。详见 {@code OssImageLoader}。
+     */
+    @Size(max = 500, message = "logo 地址最长 500 个字符")
+    private String qrLogo;
 }

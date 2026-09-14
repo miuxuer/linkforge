@@ -20,6 +20,7 @@ import com.miuxuer.linkforge.result.ResultCode;
 import com.miuxuer.linkforge.service.IdSegmentManager;
 import com.miuxuer.linkforge.service.LinkService;
 import com.miuxuer.linkforge.utils.Base62;
+import com.miuxuer.linkforge.utils.QrCodeUtils;
 import com.miuxuer.linkforge.vo.LinkVO;
 import com.miuxuer.linkforge.vo.PageResult;
 import lombok.extern.slf4j.Slf4j;
@@ -28,6 +29,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -80,6 +82,7 @@ public class LinkServiceImpl implements LinkService {
     private final LinkMapper linkMapper;
     private final IdSegmentManager idSegmentManager;
     private final LinkProperties linkProperties;
+    private final OssImageLoader ossImageLoader;
 
     /** 可选依赖：Redis 不可用时自动降级为纯 DB 模式。 */
     @Autowired(required = false)
@@ -91,10 +94,12 @@ public class LinkServiceImpl implements LinkService {
 
     public LinkServiceImpl(LinkMapper linkMapper,
                            IdSegmentManager idSegmentManager,
-                           LinkProperties linkProperties) {
+                           LinkProperties linkProperties,
+                           OssImageLoader ossImageLoader) {
         this.linkMapper = linkMapper;
         this.idSegmentManager = idSegmentManager;
         this.linkProperties = linkProperties;
+        this.ossImageLoader = ossImageLoader;
     }
 
     @Override
@@ -184,7 +189,8 @@ public class LinkServiceImpl implements LinkService {
                 .set(Link::getTitle, dto.getTitle())
                 .set(Link::getRemark, dto.getRemark())
                 .set(Link::getStatus, dto.getStatus())
-                .set(Link::getExpireTime, dto.getExpireTime());
+                .set(Link::getExpireTime, dto.getExpireTime())
+                .set(Link::getQrLogo, dto.getQrLogo());
 
         // 空实体只用来承接切面填的 update_time / update_user，自己不提供 SET 字段
         int rows = linkMapper.updateWithFill(new Link(), wrapper);
@@ -217,6 +223,48 @@ public class LinkServiceImpl implements LinkService {
 
         log.info("短链已删除: id={}, userId={}", id, userId);
         evictCache(existing.getShortCode());
+    }
+
+    @Override
+    public byte[] generateQrCode(Long id, int size) {
+        Long userId = requireCurrentUserId();
+        Link link = requireOwnedLink(id, userId);
+
+        // 二维码里放完整短链接，不是短码 —— 扫出来要能直接打开
+        String shortUrl = linkProperties.getDomain() + "/" + link.getShortCode();
+
+        try {
+            return QrCodeUtils.toPngBytesWithLogo(shortUrl, size, loadLogoQuietly(link.getQrLogo()));
+        } catch (IOException e) {
+            log.error("二维码生成失败: linkId={}, shortCode={}", id, link.getShortCode(), e);
+            throw new BusinessException(ResultCode.SYSTEM_ERROR, "二维码生成失败，请稍后重试");
+        }
+    }
+
+    /**
+     * 加载二维码的 logo，失败就返回 null（退化成不带 logo 的二维码）。
+     *
+     * <p><b>为什么这里吞掉异常</b>：logo 只是装饰，拿不到不该让整个功能失败。
+     * 用户要的是一个能扫的二维码；因为 OSS 抖了一下就返回 500，
+     * 用户拿不到任何东西，这比"少个 logo"糟糕得多。
+     *
+     * <p>但日志必须打 —— 否则 logo 配置一直失效，谁也发现不了。
+     */
+    private byte[] loadLogoQuietly(String logoUrl) {
+        if (!StringUtils.hasText(logoUrl)) {
+            return null;
+        }
+        try {
+            return ossImageLoader.load(logoUrl);
+        } catch (InterruptedException e) {
+            // 恢复中断标记再退出，不要吞掉 —— 上层可能靠它判断"该停了"
+            Thread.currentThread().interrupt();
+            log.warn("加载二维码 logo 被中断: {}", logoUrl);
+            return null;
+        } catch (Exception e) {
+            log.warn("加载二维码 logo 失败，退化为不带 logo: {}", logoUrl, e);
+            return null;
+        }
     }
 
     /**
