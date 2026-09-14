@@ -3,6 +3,7 @@ package com.miuxuer.linkforge.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
+import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.constant.UserConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
@@ -66,7 +67,7 @@ public class UserServiceImpl implements UserService {
         user.setPassword(passwordEncoder.encode(dto.getPassword()));
         user.setNickname(StringUtils.hasText(dto.getNickname()) ? dto.getNickname() : dto.getUsername());
         user.setRole(UserConstant.ROLE_USER);
-        user.setStatus(UserConstant.STATUS_ENABLED);
+        user.setStatus(StatusConstant.ENABLED);
 
         try {
             // 用 insertWithFill 而不是 insert：前者带 @AutoFill 注解，
@@ -102,7 +103,7 @@ public class UserServiceImpl implements UserService {
 
         // 禁用判断放在密码校验之后：放前面的话，"账号被禁用"这个提示本身
         // 就暴露了"这个用户名存在"，等于绕过上面统一文案的防护
-        if (user.getStatus() == null || user.getStatus() != UserConstant.STATUS_ENABLED) {
+        if (user.getStatus() == null || user.getStatus() != StatusConstant.ENABLED) {
             throw new BusinessException(ResultCode.FORBIDDEN, MessageConstant.ACCOUNT_DISABLED);
         }
 

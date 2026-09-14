@@ -32,12 +32,46 @@ public class Link {
     /** 原始长链接。 */
     private String originalUrl;
 
-    /** 累计访问量。 */
+    /** 标题，方便用户在自己的列表里认出来。 */
+    private String title;
+
+    /** 备注。 */
+    private String remark;
+
+    /**
+     * 归属用户 id。
+     *
+     * <p><b>多租户隔离的命根子。</b> 所有面向用户的查询都必须带上这个条件，
+     * 否则 A 用户就能通过改 URL 里的 id 看到 B 用户的短链（水平越权）。
+     * 具体做法见 {@code LinkServiceImpl}：查询条件里的 userId 一律从
+     * {@code CurrentHolder} 取，接口签名上不给调用方传 userId 的机会。
+     */
+    private Long userId;
+
+    /** 累计访问量，由定时任务从 Redis 回写。 */
     private Long visitCount;
+
+    /** 状态：见 {@code StatusConstant}。停用后跳转返回 404。 */
+    private Integer status;
+
+    /**
+     * 过期时间。{@code null} 表示永不过期。
+     *
+     * <p>不写 "9999-12-31" 这种哨兵值：那样每次判断都要记得排除这个特殊值，
+     * 而且真到了那天就全过期了。null 语义明确，SQL 里也是 {@code expire_time is null} 一行。
+     */
+    private LocalDateTime expireTime;
+
+    /** 二维码中间的 logo URL。 */
+    private String qrLogo;
 
     private LocalDateTime createTime;
 
     private LocalDateTime updateTime;
+
+    private Long createUser;
+
+    private Long updateUser;
 
     /** 逻辑删除标记，MyBatis-Plus 自动处理，查询时不用手写 where deleted = 0。 */
     @TableLogic

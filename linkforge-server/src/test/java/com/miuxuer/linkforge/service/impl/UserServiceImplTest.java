@@ -2,6 +2,7 @@ package com.miuxuer.linkforge.service.impl;
 
 import com.miuxuer.linkforge.constant.JwtClaimsConstant;
 import com.miuxuer.linkforge.constant.MessageConstant;
+import com.miuxuer.linkforge.constant.StatusConstant;
 import com.miuxuer.linkforge.constant.UserConstant;
 import com.miuxuer.linkforge.context.CurrentHolder;
 import com.miuxuer.linkforge.dto.UserLoginDTO;
@@ -129,7 +130,7 @@ class UserServiceImplTest {
         assertEquals(1001L, saved.getId());
         assertEquals("miuxuer", saved.getUsername());
         assertEquals(UserConstant.ROLE_USER, saved.getRole());
-        assertEquals(UserConstant.STATUS_ENABLED, saved.getStatus());
+        assertEquals(StatusConstant.ENABLED, saved.getStatus());
         // 昵称没填时用用户名兜底，避免前端显示空白
         assertEquals("miuxuer", saved.getNickname());
     }
@@ -211,7 +212,7 @@ class UserServiceImplTest {
     @Test
     @DisplayName("登录成功 → 返回用户信息和可验签的 token")
     void login_success_shouldReturnToken() {
-        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
 
         UserLoginVO vo = userService.login(loginDto("miuxuer", RAW_PASSWORD));
 
@@ -225,7 +226,7 @@ class UserServiceImplTest {
     @Test
     @DisplayName("签发的 token 能验签，claims 里的 userId 和角色都对")
     void login_tokenShouldCarryIdentityClaims() {
-        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
 
         UserLoginVO vo = userService.login(loginDto("miuxuer", RAW_PASSWORD));
         Claims claims = JwtUtils.parseJwt(JWT_SECRET, vo.getToken());
@@ -242,7 +243,7 @@ class UserServiceImplTest {
     @Test
     @DisplayName("密码错误 → 401，且提示不透露用户是否存在")
     void login_wrongPassword_shouldThrowUnauthorized() {
-        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+        when(userMapper.selectOne(any())).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
 
         BusinessException e = assertThrows(BusinessException.class,
                 () -> userService.login(loginDto("miuxuer", "wrong-password")));
@@ -267,7 +268,7 @@ class UserServiceImplTest {
     @DisplayName("账号被禁用 → 403，且提示在密码校验之后才出现")
     void login_disabledAccount_shouldThrowForbidden() {
         when(userMapper.selectOne(any()))
-                .thenReturn(existingUser("miuxuer", UserConstant.STATUS_DISABLED));
+                .thenReturn(existingUser("miuxuer", StatusConstant.DISABLED));
 
         BusinessException e = assertThrows(BusinessException.class,
                 () -> userService.login(loginDto("miuxuer", RAW_PASSWORD)));
@@ -280,7 +281,7 @@ class UserServiceImplTest {
     @DisplayName("禁用账号 + 密码也错 → 先报密码错，不泄露账号状态")
     void login_disabledWithWrongPassword_shouldReportPasswordError() {
         when(userMapper.selectOne(any()))
-                .thenReturn(existingUser("miuxuer", UserConstant.STATUS_DISABLED));
+                .thenReturn(existingUser("miuxuer", StatusConstant.DISABLED));
 
         BusinessException e = assertThrows(BusinessException.class,
                 () -> userService.login(loginDto("miuxuer", "wrong-password")));
@@ -294,7 +295,7 @@ class UserServiceImplTest {
     @DisplayName("查资料 → 按 ThreadLocal 里的用户 id 查，返回 VO")
     void getProfile_shouldUseCurrentHolderId() {
         CurrentHolder.setCurrentId(1001L);
-        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", UserConstant.STATUS_ENABLED));
+        when(userMapper.selectById(1001L)).thenReturn(existingUser("miuxuer", StatusConstant.ENABLED));
 
         UserProfileVO vo = userService.getProfile();
 
